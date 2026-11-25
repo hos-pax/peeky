@@ -3,6 +3,7 @@ name: build
 # Every push builds the Windows app. A tag like v2.1.0 also publishes it as a release:
 # installer, portable exe, zip, the installer's signature and latest.json (what the in-app updater reads).
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     tags: ['v*']
