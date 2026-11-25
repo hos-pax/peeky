@@ -15,7 +15,7 @@ window.qazi = {
   onCursor: on('cursor'), onHelper: on('helper'), onSettings: on('settings'), onClip: on('clip'), onDownload: on('download'),
   onShelf: on('shelf'), onShelfDragging: on('shelf-dragging'), onClips: on('clips'), onLevels: on('levels'),
   onPress: on('press'), onRelease: on('release'), onOpen: on('open'), onHotkey: on('hotkey'), onNotes: on('notes'), onVault: on('vault'), onOcr: on('ocr'), onOcrRead: on('ocr-read'), onSpeedo: on('speedo'),
-  onMonitorState: on('monitor-state'), onDragFx: on('drag-fx'), onPillLanded: on('pill-landed'),
+  onMonitorState: on('monitor-state'), onDragFx: on('drag-fx'), onPillLanded: on('pill-landed'), onMergePull: on('merge-pull'), onMergeComplete: on('merge-complete'),
 
   setInteractive: (v) => quiet(invoke('set_interactive', { on: !!v })),
   setTyping: (v, restore) => invoke('set_typing', { on: !!v, restore: !!restore }).catch(() => ({})),

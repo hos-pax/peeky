@@ -59,15 +59,29 @@ pub struct Media {
     mgr: Option<GlobalSystemMediaTransportControlsSessionManager>,
     last_key: String,
     none_sent: bool,
+    last_sig: String,
+    last_pos: f64,
+    last_emit: Instant,
+    force_emit: bool,
 }
 
 impl Media {
     pub fn new() -> Self {
-        Self { mgr: None, last_key: String::new(), none_sent: false }
+        Self {
+            mgr: None,
+            last_key: String::new(),
+            none_sent: false,
+            last_sig: String::new(),
+            last_pos: -1.0,
+            last_emit: Instant::now(),
+            force_emit: true,
+        }
     }
     pub fn reset_thumb(&mut self) {
         self.last_key.clear();
         self.none_sent = false;
+        self.last_sig.clear();
+        self.force_emit = true;
     }
 
     fn session(&mut self) -> Option<GlobalSystemMediaTransportControlsSession> {
@@ -91,6 +105,8 @@ impl Media {
                 sys::helper(json!({ "t": "media", "active": false }));
                 self.none_sent = true;
                 self.last_key.clear();
+                self.last_sig.clear();
+                self.last_pos = -1.0;
             }
             return;
         };
@@ -121,10 +137,26 @@ impl Media {
             kind = props.PlaybackType().and_then(|r| r.Value()).map(kind_name).unwrap_or(kind);
         }
         let can_seek = dur > 0.0 && info.Controls().and_then(|c| c.IsPlaybackPositionEnabled()).unwrap_or(false);
-        sys::helper(json!({
-            "t": "media", "active": true, "title": title, "artist": artist, "playing": playing, "kind": kind,
-            "canSeek": can_seek, "pos": pos.round(), "dur": dur.max(0.0).round(), "app": app, "key": key,
-        }));
+        let pos_r = pos.round();
+        let dur_r = dur.max(0.0).round();
+        let sig = format!("{key}|{playing}|{kind}|{can_seek}|{dur_r}");
+        let expected = if playing {
+            self.last_pos + self.last_emit.elapsed().as_millis() as f64
+        } else {
+            self.last_pos
+        };
+        let jumped = self.last_pos < 0.0 || (pos_r - expected).abs() > 1200.0;
+        let heartbeat = playing && self.last_emit.elapsed() >= Duration::from_secs(3);
+        if self.force_emit || sig != self.last_sig || jumped || heartbeat {
+            sys::helper(json!({
+                "t": "media", "active": true, "title": title, "artist": artist, "playing": playing, "kind": kind,
+                "canSeek": can_seek, "pos": pos_r, "dur": dur_r, "app": app, "key": key,
+            }));
+            self.last_sig = sig;
+            self.last_pos = pos_r;
+            self.last_emit = Instant::now();
+            self.force_emit = false;
+        }
         self.none_sent = false;
         if key != self.last_key {
             self.last_key = key.clone();

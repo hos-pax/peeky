@@ -1,38 +1,87 @@
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("fonts/Vazirmatn-Persian.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
 :root {
   --c1: #6a45ff; --c2: #9466ff; --c3: #c08cff;
   --spring: cubic-bezier(.3, 1.35, .45, 1);
   --ease: cubic-bezier(.3, .8, .3, 1);
-  --dim: rgba(255, 255, 255, .55);
+  --snap-curve: cubic-bezier(.34, 1.56, .64, 1);
+  --snap-curve: linear(0, 0.016 0.5%, 0.06 1%, 0.226 2%, 1.116 5.4%, 1.375 6.6%, 1.527 7.7%, 1.565 8.2%, 1.585 8.8%, 1.581 9.3%, 1.559 9.8%, 1.458 10.9%, 0.937 14.3%, 0.784 15.5%, 0.693 16.6%, 0.67 17.1%, 0.657 17.7%, 0.671 18.7%, 0.729 19.8%, 1.042 23.3%, 1.13 24.5%, 1.182 25.6%, 1.201 26.7%, 1.192 27.7%, 1.156 28.8%, 0.977 32.2%, 0.925 33.4%, 0.894 34.5%, 0.882 35.6%, 0.887 36.6%, 0.907 37.7%, 1.045 42.4%, 1.069 44.5%, 1.059 46.3%, 0.979 50.9%, 0.96 53.4%, 0.966 55.3%, 1.013 59.9%, 1.024 62.3%, 0.986 71.2%, 1.008 79.9%, 0.995 88.9%, 1);
+  --glass-bg: rgba(8, 10, 16, 0.55);
+  --glass-row: rgba(8, 10, 16, 0.58);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, .11) 0%, rgba(255, 255, 255, .02) 48%, rgba(0, 0, 0, .14) 100%);
+  --dim: rgba(255, 255, 255, .64);
   --h: 36px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; user-select: none; }
-body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: #fff; font-size: 13px; }
+body { font-family: "Segoe UI Variable Text", "Segoe UI", "Vazirmatn", system-ui, sans-serif; color: #fff; font-size: 13px; -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 
-/* ------------------------------------------------ the pill */
+/* ------------------------------------------------ the smoked liquid-glass pill */
 #island {
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   width: 84px; height: var(--h); border-radius: 18px;
-  background: #000; overflow: hidden;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, .4), inset 0 0 0 1px rgba(255, 255, 255, .08);
-  transition: width .5s var(--spring), transform .35s var(--spring);
-  will-change: width;
+  background: var(--glass-sheen), var(--glass-bg);
+  backdrop-filter: blur(16px) saturate(1.35);
+  overflow: hidden;
+  box-shadow:
+    0 6px 22px rgba(0, 0, 0, .42),
+    inset 0 1px 0 rgba(255, 255, 255, .24),
+    inset 0 -1px 0 rgba(255, 255, 255, .07),
+    inset 0 0 0 1px rgba(255, 255, 255, .13);
+  transition: width .46s var(--spring), transform .35s var(--spring), box-shadow .24s ease, opacity .18s ease;
+  will-change: width, transform;
 }
-#island.hover { transform: translateX(-50%) scale(1.035); }
+#island::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 3;
+  background: radial-gradient(110px 30px at var(--mx, 50%) 0%, rgba(255, 255, 255, .18), transparent 72%);
+  opacity: .55; transition: opacity .22s ease;
+}
+#island.hover { transform: translateX(-50%) scale(1.035); box-shadow: 0 8px 26px rgba(0, 0, 0, .48), inset 0 1px 0 rgba(255, 255, 255, .3), inset 0 0 0 1px rgba(255, 255, 255, .18); }
 /* tucked above the screen edge: only a 3px handle stays visible (nothing at all over a fullscreen app) */
-#island.tucked, #island.tucked.hover { transform: translateX(-50%) translateY(-41px); box-shadow: none; background: rgba(0, 0, 0, .75); transition: width .35s var(--ease), transform .35s var(--ease); }
+#island.tucked, #island.tucked.hover { transform: translateX(-50%) translateY(-41px); box-shadow: none; background: rgba(6, 8, 13, .62); backdrop-filter: blur(8px); transition: width .35s var(--ease), transform .35s var(--ease); }
 #island.tucked.full { transform: translateX(-50%) translateY(-48px); }
 #island.tucked .view, #island.tucked #sky { opacity: 0 !important; transition: opacity .12s; }
 #glow.off { display: none; }
 #glow.drag-glow { transition: opacity .15s, transform .22s var(--spring); }
-#island.grabbing { transition: width .5s var(--spring); cursor: grabbing; box-shadow: 0 10px 28px rgba(0, 0, 0, .58), inset 0 0 0 1px rgba(255, 255, 255, .18); }
+#island.grabbing {
+  transition: width .45s var(--spring), box-shadow .16s;
+  cursor: grabbing;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .56), 0 0 22px color-mix(in srgb, var(--c2) 38%, transparent), inset 0 1px 0 rgba(255, 255, 255, .34), inset 0 0 0 1px rgba(255, 255, 255, .22);
+}
 #island.grabbing * { cursor: grabbing !important; }
-#island.snapping { transition: width .5s var(--spring), transform .42s var(--spring), box-shadow .35s; }
-#island.bump { animation: bump .5s var(--spring); }
-@keyframes bump { 30% { transform: translateX(-50%) scale(1.07, .96); } }
-#island.sky .view { text-shadow: 0 1px 3px rgba(20, 0, 60, .45); }
-#island.sky .dim, #island.sky #m-artist { color: rgba(255, 255, 255, .8); }
+#island.snapping { transition: width .45s var(--spring), transform .48s var(--snap-curve), box-shadow .35s; }
+#island.merge-pull {
+  transition: width .45s var(--spring), transform .24s var(--spring), box-shadow .22s;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .55), 0 0 28px color-mix(in srgb, var(--c3) 55%, transparent), inset 0 0 0 1.5px color-mix(in srgb, var(--c3) 72%, #fff);
+}
+#island.absorbing {
+  transition: width .2s, transform .11s ease-out, opacity .12s ease-out;
+  box-shadow: 0 0 26px color-mix(in srgb, var(--c3) 75%, #fff), inset 0 0 0 1.5px rgba(255, 255, 255, .65);
+}
+#island.merge-burst { animation: mergeBurst .58s var(--snap-curve); }
+@keyframes mergeBurst {
+  0% { box-shadow: 0 0 38px rgba(192, 140, 255, .85), inset 0 0 0 2px rgba(255, 255, 255, .8); transform: translateX(-50%) scale(1.13, 1.15); }
+  45% { transform: translateX(-50%) scale(0.96, 1.04); }
+  100% { transform: translateX(-50%) scale(1); }
+}
+#island.bump { animation: bump .5s var(--snap-curve); }
+@keyframes bump { 30% { transform: translateX(-50%) scale(1.08, .94); } }
+#island.sky .view { text-shadow: 0 1px 3px rgba(10, 4, 30, .75), 0 0 10px rgba(255, 255, 255, .18); }
+#island.sky .dim, #island.sky #m-artist { color: rgba(255, 255, 255, .86); }
+
+/* subtle luminous glow & crisp drop-shadow on texts & vector icons across all themes */
+#island .view { z-index: 2; text-shadow: 0 1px 2px rgba(0, 0, 0, .78), 0 0 8px rgba(255, 255, 255, .12); }
+#island #i-time, #island #t-time, #island #m-title, #island #n-title, #island #h-title, #island #tm-time {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .82), 0 0 11px rgba(255, 255, 255, .20);
+}
+#island svg, #stack .row .ic svg {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .62)) drop-shadow(0 0 5px rgba(255, 255, 255, .16));
+}
 
 #glow {
   position: absolute; top: 6px; left: 50%; width: 120px; height: 40px; margin-left: -60px;
@@ -98,12 +147,29 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #i-dot.on { display: block; }
 
 /* tools */
-[data-view="tools"] { padding: 0 6px 0 14px; gap: 7px; }
+[data-view="tools"] { padding: 0 7px 0 14px; gap: 7px; }
 [data-view="tools"] .ib { margin-left: -3px; }
 #t-time { font-variant-numeric: tabular-nums; font-size: 13.5px; }
-#t-date { cursor: pointer; transition: color .15s; }
-#t-date:hover { color: #fff; }
-#t-bat:empty { display: none; }
+#t-date {
+  cursor: pointer; transition: color .15s, text-shadow .15s;
+  font-family: "Vazirmatn", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-feature-settings: "tnum"; font-size: 11.5px; font-weight: 500;
+  unicode-bidi: isolate; color: rgba(255, 255, 255, .76); line-height: 1.2;
+}
+#t-date:hover { color: #fff; text-shadow: 0 0 10px rgba(255, 255, 255, .32); }
+.bat-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-variant-numeric: tabular-nums; font-size: 11.5px; font-weight: 500;
+  color: rgba(255, 255, 255, .78);
+}
+.bat-chip:empty { display: none; }
+.bat-chip svg { width: 17px; height: 11px; flex: none; overflow: visible; }
+.bat-chip.chg { color: #86efac; }
+.bat-chip.chg svg { filter: drop-shadow(0 0 6px rgba(74, 222, 128, .48)); }
+.bat-chip.low { color: #fcd34d; }
+.bat-chip.crit { color: #fda4af; }
+@keyframes batPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+.bat-chip.chg .bat-bolt { animation: batPulse 1.6s ease-in-out infinite; }
 
 /* media */
 [data-view="media"] { gap: 7px; padding: 0 5px 0 6px; }
@@ -162,24 +228,32 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #tm-time.done { color: #ff6b6b; }
 
 /* tiny inline message (e.g. picked color) */
-#flash { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 7px; background: #000; font-weight: 600; font-size: 12.5px; opacity: 0; pointer-events: none; transition: opacity .2s; white-space: nowrap; }
+#flash { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; gap: 7px; background: rgba(8, 10, 16, .74); backdrop-filter: blur(12px); font-weight: 600; font-size: 12.5px; opacity: 0; pointer-events: none; transition: opacity .2s; white-space: nowrap; text-shadow: 0 1px 3px rgba(0,0,0,.8), 0 0 10px rgba(255,255,255,.18); }
 #flash.on { opacity: 1; }
 #flash i { width: 14px; height: 14px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .3); }
 
-/* ------------------------------------------------ notification stack (pills dropping under the island) */
+/* ------------------------------------------------ notification stack (smoked glass pills under the island) */
 #stack { position: absolute; top: 50px; left: 50%; width: 400px; margin-left: -200px; display: flex; flex-direction: column; align-items: center; opacity: 0; pointer-events: none; transition: opacity .18s; }
 #stack.open { opacity: 1; pointer-events: auto; }
 #stack-list { width: 100%; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 2px 8px 4px; scrollbar-width: none; }
 #stack-list::-webkit-scrollbar { display: none; }
-.row { flex: none; height: 34px; border-radius: 17px; background: #000; box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .08); display: flex; align-items: center; gap: 7px; padding: 0 6px 0 6px; white-space: nowrap; cursor: pointer; transition: transform .25s var(--spring), background .15s; }
-.row:hover { transform: scale(1.02); background: #111; }
+.row {
+  flex: none; height: 34px; border-radius: 17px;
+  background: var(--glass-sheen), var(--glass-row);
+  backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .17), inset 0 0 0 1px rgba(255, 255, 255, .11);
+  display: flex; align-items: center; gap: 7px; padding: 0 6px 0 6px; white-space: nowrap; cursor: pointer;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .72), 0 0 7px rgba(255, 255, 255, .10);
+  transition: transform .25s var(--spring), background .15s, box-shadow .18s;
+}
+.row:hover { transform: scale(1.02); background: var(--glass-sheen), rgba(20, 24, 34, .70); box-shadow: 0 6px 18px rgba(0,0,0,.44), inset 0 1px 0 rgba(255,255,255,.24), inset 0 0 0 1px rgba(255,255,255,.16); }
 .row.empty { justify-content: center; color: var(--dim); cursor: default; width: 170px; align-self: center; font-size: 12px; }
-.row.empty:hover { transform: none; background: #000; }
+.row.empty:hover { transform: none; background: var(--glass-sheen), var(--glass-row); }
 #stack.fresh .row { animation: drop .42s var(--spring) both; animation-delay: calc(var(--i, 0) * 45ms); }
 @keyframes drop { from { opacity: 0; transform: translateY(-16px) scale(.9); } }
 .row .ic { flex: none; width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, #7c5cff, #22d3ee) center/cover; display: grid; place-items: center; font-weight: 700; font-size: 11px; }
 .row .app { flex: none; max-width: 74px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
-.row .mqbox { flex: 1; min-width: 0; font-size: 12.5px; color: rgba(255, 255, 255, .78); }
+.row .mqbox { flex: 1; min-width: 0; font-size: 12.5px; color: rgba(255, 255, 255, .84); }
 .row .mqbox b { color: #fff; font-weight: 600; margin-right: 5px; }
 .row .tm { flex: none; width: 26px; text-align: center; font-size: 10.5px; }
 .row .x { flex: none; width: 22px; height: 22px; border-radius: 50%; display: none; place-items: center; color: rgba(255, 255, 255, .7); margin-left: 2px; }
@@ -187,35 +261,43 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .row .x:hover { background: rgba(255, 255, 255, .18); color: #fff; }
 .row.empty.wide { width: 250px; }
 .row.clip { padding-left: 4px; gap: 4px; }
-.row.clip .mqbox { color: rgba(255, 255, 255, .88); }
-.row .pin { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: rgba(255, 255, 255, .35); transition: background .15s, color .15s, transform .2s var(--spring); }
+.row.clip .mqbox { color: rgba(255, 255, 255, .90); }
+.row .pin { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: rgba(255, 255, 255, .38); transition: background .15s, color .15s, transform .2s var(--spring); }
 .row .pin svg { width: 13px; height: 13px; }
 .row .pin:hover { background: rgba(255, 255, 255, .16); color: #fff; }
 .row .pin:active { transform: scale(.8); }
-.row.pinned .pin { color: #a98bff; }
-.row.pinned { box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(148, 102, 255, .45); }
+.row.pinned .pin { color: #c4b5fd; }
+.row.pinned { box-shadow: 0 4px 16px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255,255,255,.2), inset 0 0 0 1px rgba(167, 139, 250, .55); }
 .row.file { cursor: grab; padding-left: 8px; }
-.row .ic.plain { background-color: transparent; background-image: none; border-radius: 4px; width: 20px; height: 20px; background-size: contain; background-repeat: no-repeat; background-position: center; color: rgba(255, 255, 255, .8); }
+.row .ic.plain { background-color: transparent; background-image: none; border-radius: 4px; width: 20px; height: 20px; background-size: contain; background-repeat: no-repeat; background-position: center; color: rgba(255, 255, 255, .85); }
 .row .ic.plain svg { width: 15px; height: 15px; }
 .row .x.show { display: grid; }
 .row:hover .tm { display: none; }
 .row:hover .x { display: grid; }
-#stack-clear { height: 26px; padding: 0 14px; border-radius: 13px; background: #000; box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .08); font-size: 11.5px; color: rgba(255, 255, 255, .8); margin-top: 4px; transition: background .15s, transform .2s var(--spring), color .15s; }
-#stack-clear:hover { background: #fff; color: #000; transform: scale(1.05); }
+#stack-clear { height: 26px; padding: 0 14px; border-radius: 13px; background: var(--glass-sheen), var(--glass-row); backdrop-filter: blur(12px); box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255,255,255,.16), inset 0 0 0 1px rgba(255, 255, 255, .11); font-size: 11.5px; color: rgba(255, 255, 255, .86); margin-top: 4px; transition: background .15s, transform .2s var(--spring), color .15s; }
+#stack-clear:hover { background: rgba(255, 255, 255, .92); color: #000; transform: scale(1.05); }
 #stack-clear.hidden { display: none; }
 
-/* ------------------------------------------------ the face: two eyes that blink (instead of the clock) */
-#i-face { display: none; gap: 9px; align-items: center; height: 14px; --lx: 0px; --ly: 0px; }
+/* ------------------------------------------------ the face: luminous expressive eyes */
+#i-face { display: none; gap: 9px; align-items: center; height: 14px; --lx: 0px; --ly: 0px; --es: 1; }
 .faceon #i-face { display: inline-flex; }
 .faceon #i-time { display: none; }
-#i-face i { width: 7px; height: 11px; border-radius: 50%; background: #fff; transform: translate(var(--lx), var(--ly)); transition: transform .14s ease-out, height .14s, width .14s, border-radius .14s; }
+#i-face i {
+  position: relative; width: 7.5px; height: 11.5px; border-radius: 50%;
+  background: radial-gradient(circle at 34% 28%, #ffffff 0%, #f1f5ff 64%, #cbd5e1 100%);
+  box-shadow: 0 0 8px rgba(255, 255, 255, .42), 0 1.5px 3px rgba(0, 0, 0, .62);
+  transform: translate(var(--lx), var(--ly)) scale(var(--es));
+  transition: transform .13s ease-out, height .14s, width .14s, border-radius .14s, box-shadow .18s;
+}
 #i-face.blink i, #i-face.wink i:last-child { transform: translate(var(--lx), var(--ly)) scaleY(.1); transition-duration: .06s; }
 #i-face.squint i { transform: translate(var(--lx), var(--ly)) scaleY(.45); }
-#i-face.wide i { transform: translate(var(--lx), var(--ly)) scale(1.22); }
+#i-face.wind i { transform: translate(var(--lx), var(--ly)) scale(1.12, .68); }
+#i-face.wide i { transform: translate(var(--lx), var(--ly)) scale(1.24); box-shadow: 0 0 11px rgba(255, 255, 255, .58), 0 1px 3px rgba(0, 0, 0, .6); }
+#i-face.merge-watch i { transform: translate(var(--lx), var(--ly)) scale(1.28); box-shadow: 0 0 13px rgba(192, 140, 255, .86), 0 1px 3px rgba(0, 0, 0, .6); }
 #i-face.look-l i { transform: translate(-3px, 0); }
 #i-face.look-r i { transform: translate(3px, 0); }
-#i-face.sleepy i { height: 3px; width: 9px; border-radius: 2px; }
-#i-face.happy i { height: 6px; width: 10px; background: transparent; border: 2.4px solid #fff; border-bottom: 0; border-radius: 10px 10px 0 0; }
+#i-face.sleepy i { height: 3px; width: 9px; border-radius: 2px; box-shadow: 0 0 5px rgba(255, 255, 255, .28); }
+#i-face.happy i { height: 6px; width: 10px; background: transparent; box-shadow: none; filter: drop-shadow(0 0 5px rgba(255, 255, 255, .55)); border: 2.4px solid #fff; border-bottom: 0; border-radius: 10px 10px 0 0; }
 
 /* ------------------------------------------------ typing on the pill */
 [data-view="input"] { padding: 0 6px 0 11px; gap: 6px; }
@@ -249,7 +331,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .row.note.done .mqbox { color: var(--dim); }
 /* settings rows */
 .row.set { cursor: default; padding: 0 8px 0 14px; font-size: 12.5px; }
-.row.set:hover { transform: none; background: #000; }
+.row.set:hover { transform: none; background: var(--glass-sheen), var(--glass-row); box-shadow: 0 4px 16px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .17), inset 0 0 0 1px rgba(255, 255, 255, .11); }
 .row.set .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: rgba(255, 255, 255, .9); }
 .row.set.info { justify-content: center; color: var(--dim); font-size: 11.5px; height: 26px; background: none; box-shadow: none; }
 .sw { flex: none; width: 34px; height: 20px; border-radius: 10px; background: rgba(255, 255, 255, .16); position: relative; transition: background .2s; }
@@ -273,9 +355,18 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #dots .cam { background: #34d058; }
 #dots .off { background: #ff4d5e; }
 #island.tucked #dots { opacity: 0; }
-.tag { font-size: 9.5px; font-weight: 700; letter-spacing: .4px; padding: 2px 6px; border-radius: 8px; background: rgba(74, 222, 128, .18); color: #7dedA6; }
+.tag {
+  display: inline-flex; align-items: center; gap: 4px; height: 18px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .35px; padding: 0 7px 0 5px;
+  border-radius: 9px; background: rgba(74, 222, 128, .15); color: #86efac;
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, .26), 0 0 8px rgba(74, 222, 128, .12);
+}
 .tag:empty { display: none; }
-.tag.bad { background: rgba(255, 77, 94, .2); color: #ff8b96; }
+.tag.bad { background: rgba(255, 77, 94, .18); color: #fda4af; box-shadow: inset 0 0 0 1px rgba(255, 77, 94, .32), 0 0 8px rgba(255, 77, 94, .15); }
+.live-dot { width: 5px; height: 5px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 6px #4ade80; flex: none; animation: livePulse 2s ease-in-out infinite; }
+.live-dot.proxy { background: #60a5fa; box-shadow: 0 0 6px #60a5fa; }
+.live-dot.off { background: #ff5d6c; box-shadow: 0 0 6px #ff5d6c; animation: none; }
+@keyframes livePulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.82); } }
 .swn { font-size: 11px; margin-right: 2px; }
 .sws { flex: none; display: inline-flex; gap: 5px; padding: 0 2px; }
 .sws button { width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .28); transition: transform .2s var(--spring); }
@@ -353,11 +444,11 @@ body.daylight #island .sep { background: rgba(24, 34, 47, .25); }
 .row.loc.cur { box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(143, 107, 255, .7); }
 
 /* ------------------------------------------------ a notification waiting beside a pill that is in use */
-#side { position: absolute; top: 12px; height: 28px; border-radius: 14px; background: #000; box-shadow: 0 3px 12px rgba(0, 0, 0, .4), inset 0 0 0 1px rgba(255, 255, 255, .1); display: flex; align-items: center; gap: 6px; padding: 0 3px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; opacity: 0; transform: translateX(-14px) scale(.85); pointer-events: none; transition: opacity .18s, transform .35s var(--spring), left .5s var(--spring); cursor: pointer; }
+#side { position: absolute; top: 12px; height: 28px; border-radius: 14px; background: var(--glass-sheen), var(--glass-row); backdrop-filter: blur(14px) saturate(1.3); box-shadow: 0 4px 14px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .2), inset 0 0 0 1px rgba(255, 255, 255, .13); display: flex; align-items: center; gap: 6px; padding: 0 3px; font-size: 12px; font-weight: 600; text-shadow: 0 1px 2px rgba(0, 0, 0, .75), 0 0 8px rgba(255, 255, 255, .14); white-space: nowrap; overflow: hidden; opacity: 0; transform: translateX(-14px) scale(.85); pointer-events: none; transition: opacity .18s, transform .35s var(--spring), left .5s var(--spring); cursor: pointer; }
 #side.on { opacity: 1; transform: none; pointer-events: auto; }
 #side .ic { flex: none; width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, #7c5cff, #22d3ee) center / cover; display: grid; place-items: center; font-size: 11px; }
 #side span { overflow: hidden; text-overflow: ellipsis; padding-right: 7px; }
-#side:hover { background: #161616; }
+#side:hover { background: var(--glass-sheen), rgba(20, 24, 34, .72); }
 
 /* room around the rows for their shadows (the list scrolls, so anything past its edge is cut off) */
 #stack { width: 440px; margin-left: -220px; }
@@ -370,7 +461,7 @@ body.daylight #island .sep { background: rgba(24, 34, 47, .25); }
 /* the tour: what the app can do, one feature a row */
 .row.tour { cursor: default; }
 .row.tour.can { cursor: pointer; }
-.row.tour.can:hover { background: #121212; transform: scale(1.015); }
+.row.tour.can:hover { background: var(--glass-sheen), rgba(20, 24, 34, .72); transform: scale(1.015); }
 .row.tour .ic.plain { width: 30px; height: 30px; border-radius: 50%; background-color: rgba(255, 255, 255, .09); color: #fff; }
 .row.tour .lbl .dim { overflow: hidden; text-overflow: ellipsis; }
 .row .keys { flex: none; height: 20px; padding: 0 8px; border-radius: 10px; background: rgba(255, 255, 255, .1); color: rgba(255, 255, 255, .75); font-size: 10.5px; display: inline-flex; align-items: center; margin-right: 4px; }
@@ -378,16 +469,21 @@ body.daylight #island .sep { background: rgba(24, 34, 47, .25); }
 /* ------------------------------------------------ passwords: search and buttons above the list, which stays open */
 #stack-head { display: none; width: 100%; padding: 6px 20px 2px; gap: 6px; align-items: center; }
 #stack-head.on { display: flex; }
-#stack-head .search { flex: 1; min-width: 0; height: 30px; border-radius: 15px; background: #000; box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .1); display: flex; align-items: center; gap: 7px; padding: 0 12px 0 11px; color: rgba(255, 255, 255, .45); cursor: text; transition: box-shadow .15s, color .15s; }
+#stack-head .search { flex: 1; min-width: 0; height: 30px; border-radius: 15px; background: var(--glass-sheen), var(--glass-row); backdrop-filter: blur(14px); box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255,255,255,.16), inset 0 0 0 1px rgba(255, 255, 255, .12); display: flex; align-items: center; gap: 7px; padding: 0 12px 0 11px; color: rgba(255, 255, 255, .52); cursor: text; transition: box-shadow .15s, color .15s; }
 #stack-head .search svg { flex: none; width: 14px; height: 14px; }
 #stack-head .search:focus-within { box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1.5px rgba(169, 139, 255, .75); color: #fff; }
 #stack-head input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: 0; color: #fff; font: inherit; font-size: 12.5px; caret-color: #a98bff; }
 #stack-head input::placeholder { color: rgba(255, 255, 255, .38); }
-#stack-head .pillbtn { flex: none; height: 30px; padding: 0 12px; border-radius: 15px; background: #000; box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .1); font-size: 12px; color: rgba(255, 255, 255, .88); display: inline-flex; align-items: center; gap: 5px; transition: background .15s, color .15s, transform .2s var(--spring); }
+#stack-head .pillbtn { flex: none; height: 30px; padding: 0 12px; border-radius: 15px; background: var(--glass-sheen), var(--glass-row); backdrop-filter: blur(14px); box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255,255,255,.16), inset 0 0 0 1px rgba(255, 255, 255, .12); font-size: 12px; color: rgba(255, 255, 255, .90); display: inline-flex; align-items: center; gap: 5px; transition: background .15s, color .15s, transform .2s var(--spring); }
 #stack-head .pillbtn svg { width: 13px; height: 13px; }
-#stack-head .pillbtn:hover { background: #fff; color: #000; transform: scale(1.05); }
+#stack-head .pillbtn:hover { background: rgba(255, 255, 255, .92); color: #000; transform: scale(1.05); }
 #stack-head .pillbtn.round { width: 30px; padding: 0; justify-content: center; }
-.row.vault.sel { background: #161616; box-shadow: 0 3px 12px rgba(0, 0, 0, .35), inset 0 0 0 1.5px rgba(169, 139, 255, .6); }
+.row.vault.sel { background: var(--glass-sheen), rgba(24, 24, 38, .72); box-shadow: 0 3px 12px rgba(0, 0, 0, .38), inset 0 0 0 1.5px rgba(169, 139, 255, .65); }
+
+@media (prefers-reduced-motion: reduce) {
+  #island, .row, #i-face i { transition-duration: .12s; }
+  #island.bump, #island.merge-burst, #stack.fresh .row, .bat-chip.chg .bat-bolt, .live-dot { animation: none; }
+}
 .row .act.ok { color: #34d399; background: rgba(52, 211, 153, .14); }
 /* a password step waiting on the pill while another window is used: its icon breathes */
 .parked #in-icon { animation: waiting 1.6s ease-in-out infinite; }

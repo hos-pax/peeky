@@ -99,10 +99,10 @@ const st = {
 // the window takes the mouse only while the cursor is on the island (or a text field is open)
 let mouseSent = null;
 function syncMouse(force) {
-  const want = st.hover || (st.typing && !st.parked) || st.dragOut;
+  const want = st.hover || (st.typing && !st.parked) || st.dragOut || st.pillDrag;
   if (force || want !== mouseSent) { mouseSent = want; window.qazi.setInteractive(want); }
 }
-setInterval(() => syncMouse(true), 500);      // repeated, so one lost message can never leave the pill unclickable
+setInterval(() => syncMouse(true), 2000);      // fallback heartbeat; interactive transitions always emit right away
 const timer = { left: 25 * 60000, endAt: 0, running: false, done: false };
 const views = Object.fromEntries($$('.view').map((v) => [v.dataset.view, v]));
 let cur = 'idle';
@@ -174,10 +174,24 @@ function render() {
     if (sideN) placeSide();
   }
 }
-setInterval(render, 70);
+function idleRenderTick() {
+  if (!st.tucked || st.notif || st.hover || st.stackOpen || st.typing || timer.running || st.manual || st.dragOut || Date.now() < Math.max(st.volUntil, st.hudUntil, st.revealUntil, st.holdUntil)) {
+    render();
+  } else {
+    updateTuck();
+  }
+}
+setInterval(idleRenderTick, 180);
 
 // ------------------------------------------------------------ cursor: hover + click-through
-window.qazi.onCursor(({ x, y }) => { st.cx = x; st.cy = y; evalHover(x, y); });
+window.qazi.onCursor(({ x, y }) => {
+  st.cx = x; st.cy = y;
+  if (!st.tucked) {
+    const r = island.getBoundingClientRect();
+    if (r.width > 10) island.style.setProperty('--mx', clamp(((x - r.left) / r.width) * 100, 0, 100).toFixed(1) + '%');
+  }
+  evalHover(x, y);
+});
 function evalHover(x, y) {
   if (x === undefined) return;
   if (st.tucked) {     // stay click-through; only a deliberate rest on the top edge brings it back
@@ -757,15 +771,26 @@ window.qazi.onHelper((m) => {
 });
 
 // Small standing signs: a dot in the corner of the pill while the microphone (amber) or the camera (green) is in
-// use or the internet is gone (red), and a word in the menu while a VPN or proxy is on.
+// use or the internet is gone (red), and a sleek glass badge while a VPN or proxy is active.
 function paintStatus() {
   const d = $('#dots'), s = st.sensors, n = st.net;
   d.innerHTML = (s.cam.length ? '<i class="cam"></i>' : '') + (s.mic.length ? '<i class="mic"></i>' : '') + (n.online ? '' : '<i class="off"></i>');
   d.title = [s.cam.length ? 'Camera: ' + s.cam.join(', ') : '', s.mic.length ? 'Microphone: ' + s.mic.join(', ') : '', n.online ? '' : 'No internet'].filter(Boolean).join(' · ');
   const tn = $('#t-net');
-  tn.textContent = !n.online ? 'Offline' : n.vpn ? 'VPN' : n.proxy ? 'Proxy' : '';
-  tn.title = n.vpn ? 'VPN: ' + n.vpn : n.proxy ? 'A system proxy is on' : '';
-  tn.className = 'tag' + (!n.online ? ' bad' : '');
+  if (!n.online) {
+    tn.innerHTML = '<i class="live-dot off"></i><span>Offline</span>';
+    tn.className = 'tag bad';
+  } else if (n.vpn) {
+    tn.innerHTML = '<i class="live-dot"></i><span>VPN</span>';
+    tn.className = 'tag';
+  } else if (n.proxy) {
+    tn.innerHTML = '<i class="live-dot proxy"></i><span>Proxy</span>';
+    tn.className = 'tag';
+  } else {
+    tn.textContent = '';
+    tn.className = 'tag';
+  }
+  tn.title = !n.online ? 'No internet connection' : n.vpn ? 'VPN: ' + n.vpn : n.proxy ? 'A system proxy is on' : '';
 }
 
 // ------------------------------------------------------------ audio analysis (system loopback)
@@ -823,11 +848,11 @@ function drawStars(g, t, dt, x0, x1, W, A, every) {
     else { g.beginPath(); g.arc(s.x, s.y, s.r * (0.85 + lv * 0.9), 0, 6.283); g.fill(); }
   }
 }
-// the night sky: the cover's colours, soft lights, stars, a shooting star on a strong beat
+// the night sky: smoked translucent glass gradient, soft lights, stars, shooting star on a beat
 function paintSky(g, t, dt, x0, x1, W, A) {
   const grad = g.createLinearGradient(x0, 0, x1, SKY_H);
   grad.addColorStop(0, palette[0]); grad.addColorStop(0.55, palette[1]); grad.addColorStop(1, palette[2]);
-  g.globalAlpha = A * clamp(0.8 + bass * 0.2, 0, 1); g.fillStyle = grad; g.fillRect(x0, 0, W, SKY_H);
+  g.globalAlpha = A * clamp(0.46 + bass * 0.18, 0.44, 0.68); g.fillStyle = grad; g.fillRect(x0, 0, W, SKY_H);
 
   g.globalCompositeOperation = 'lighter';
   // soft lights that sway and swell with the music (kept faint: three of them on top of each other must not wash the pill out)
@@ -857,8 +882,7 @@ function paintSky(g, t, dt, x0, x1, W, A) {
   }
 }
 
-// ---- skins. Liquid camo: a dark surface with thin bright veins that drifts steadily to one side; the louder the
-// music, the more of it floods with colour. It is a small field of numbers (one per 2x2 pixels) blown up smoothly.
+// ---- skins. Smoked translucent liquid camo (dark ~55% glass with glowing veins; computes only active pill width)
 const FW = SKY_W / 2, FH = SKY_H / 2;
 const fcan = document.createElement('canvas'); fcan.width = FW; fcan.height = FH;
 const fctx = fcan.getContext('2d'), fimg = fctx.createImageData(FW, FH);
@@ -866,11 +890,11 @@ const LIQ = {
   reactor: { bg: [3, 5, 4], lo: [36, 140, 10], hi: [165, 255, 55], spec: [235, 255, 200], thr: 0.8, speed: 1 },
   ember: { bg: [12, 2, 4], lo: [150, 8, 22], hi: [255, 52, 40], spec: [255, 200, 170], thr: 0.78, speed: 1 },
   crystal: { bg: [9, 8, 46], lo: [44, 48, 205], hi: [140, 105, 255], spec: [236, 232, 255], thr: 0.45, speed: 0.8 },
-  venom: { bg: [0, 0, 1], lo: [14, 15, 19], hi: [38, 41, 50], spec: [150, 156, 170], thr: 0.62, speed: 0.55 },
+  venom: { bg: [4, 5, 8], lo: [20, 22, 30], hi: [56, 62, 76], spec: [185, 195, 215], thr: 0.62, speed: 0.55 },
 };
 function paintLiquid(g, t, x0, x1, W, A, P) {
   const d = fimg.data, tt = t * 0.0006 * P.speed, scroll = t * 0.021 * P.speed;
-  const c0 = Math.max(0, Math.floor(x0 / 2) - 1), c1 = Math.min(FW, Math.ceil(x1 / 2) + 1);
+  const c0 = Math.max(0, Math.floor(x0 / 2) - 1), c1 = Math.min(FW, Math.ceil(x1 / 2) + 1), cw = Math.max(1, c1 - c0);
   const flood = energy * 0.9 + bass * 0.22, bg = P.bg, lo = P.lo, hi = P.hi, sp = P.spec;
   for (let x = c0; x < c1; x++) {
     const u = (x * 2 + scroll) / 23;
@@ -886,29 +910,29 @@ function paintLiquid(g, t, x0, x1, W, A, P) {
         let val = bg[c] + (lo[c] - bg[c]) * k; val += (hi[c] - val) * h; val += (sp[c] - val) * s;
         d[i + c] = val;
       }
-      d[i + 3] = 255;
+      d[i + 3] = Math.round(clamp(124 + k * 56 + h * 36 + s * 24, 120, 224));
     }
   }
-  fctx.putImageData(fimg, 0, 0);
+  fctx.putImageData(fimg, 0, 0, c0, 0, cw, FH);
   g.globalAlpha = A; g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-  g.drawImage(fcan, 0, 0, FW, FH, 0, 0, SKY_W, SKY_H);
+  g.drawImage(fcan, c0, 0, cw, FH, c0 * 2, 0, cw * 2, SKY_H);
 }
 const PAINT = {
   sky: paintSky,
-  // a dark galaxy: clouds of magenta and violet drifting over black, a few stars
+  // a smoked translucent dark galaxy: clouds of magenta and violet drifting over ~55% dark glass
   nebula(g, t, dt, x0, x1, W, A) {
-    g.globalAlpha = A; g.fillStyle = '#08030f'; g.fillRect(x0, 0, W, SKY_H);
+    g.globalAlpha = A; g.fillStyle = 'rgba(8, 4, 15, 0.54)'; g.fillRect(x0, 0, W, SKY_H);
     g.globalCompositeOperation = 'lighter';
     const C = ['255,45,150', '130,60,255', '60,80,230', '255,90,200', '170,40,220'];
     for (let i = 0; i < 5; i++) {
       const v = (levels[2 + i * 4] + levels[3 + i * 4]) / 2;
-      const span = W + 120, cx = x0 - 60 + ((((i * 0.2 * span - t * 0.012 * (1 + i * 0.13)) % span) + span) % span);     // all drifting the same way
+      const span = W + 120, cx = x0 - 60 + ((((i * 0.2 * span - t * 0.012 * (1 + i * 0.13)) % span) + span) % span);
       const cy = SKY_H / 2 + Math.cos(t * 0.0006 + i * 2.3) * 10, rad = 26 + v * 40 + (i % 2) * 10;
       const rg = g.createRadialGradient(cx, cy, 0, cx, cy, rad);
-      rg.addColorStop(0, `rgba(${C[i]},${clamp(0.34 + v * 0.36, 0, 0.6).toFixed(3)})`); rg.addColorStop(1, `rgba(${C[i]},0)`);
+      rg.addColorStop(0, `rgba(${C[i]},${clamp(0.32 + v * 0.34, 0, 0.58).toFixed(3)})`); rg.addColorStop(1, `rgba(${C[i]},0)`);
       g.globalAlpha = A; g.fillStyle = rg; g.fillRect(cx - rad, 0, rad * 2, SKY_H);
     }
-    drawStars(g, t, dt, x0, x1, W, A * 0.8, 2);
+    drawStars(g, t, dt, x0, x1, W, A * 0.85, 2);
   },
 };
 for (const k of Object.keys(LIQ)) PAINT[k] = (g, t, dt, x0, x1, W, A) => paintLiquid(g, t, x0, x1, W, A, LIQ[k]);
@@ -919,11 +943,12 @@ let storm = 0, strike = 0;                  // the cloud: 0 = white fair-weather
 const cloudRGB = () => [244, 247, 251].map((v, i) => Math.round(clamp(v + ([50, 56, 68][i] - v) * storm + strike * 95 * storm, 0, 255)));
 // a white cloud; when music plays it darkens into a thundercloud (the puffs, rain and lightning are drawn by drawCloud)
 PAINT.cloud = (g, t, dt, x0, x1, W, A) => {
-  g.globalAlpha = A; g.fillStyle = `rgb(${cloudRGB()})`; g.fillRect(x0, 0, W, SKY_H);
+  const cr = cloudRGB();
+  g.globalAlpha = A; g.fillStyle = `rgba(${cr[0]},${cr[1]},${cr[2]},0.62)`; g.fillRect(x0, 0, W, SKY_H);
   for (let i = 0; i < 5; i++) {        // soft light and shade drifting through it
     const span = W + 100, cx = x0 - 50 + ((((i * 0.2 * span - t * 0.009 * (1 + i * 0.17)) % span) + span) % span), cy = 8 + (i % 3) * 10, rad = 22 + (i % 2) * 12;
     const dark = i % 2 === 1, rg = g.createRadialGradient(cx, cy, 0, cx, cy, rad);
-    const col = dark ? '20,26,40' : '255,255,255', a = dark ? 0.06 + storm * 0.3 : 0.5 - storm * 0.42;
+    const col = dark ? '20,26,40' : '255,255,255', a = dark ? 0.08 + storm * 0.3 : 0.45 - storm * 0.36;
     rg.addColorStop(0, `rgba(${col},${a.toFixed(3)})`); rg.addColorStop(1, `rgba(${col},0)`);
     g.fillStyle = rg; g.fillRect(cx - rad, 0, rad * 2, SKY_H);
   }
@@ -931,10 +956,10 @@ PAINT.cloud = (g, t, dt, x0, x1, W, A) => {
 };
 // Water, lava and ice change the body itself (see drawBody / drawIce); inside, the pill is painted to match.
 const SCENE = {
-  water: { stops: [[0.05, '#3bb6f6'], [0.46, '#0f5cc9'], [1, '#0b49b8']], wob: 1.7, r: 4.6, len: 15, every: 1500, g: 520 },
-  lava: { stops: [[0.08, '#190503'], [0.3, '#4c1005'], [0.44, '#e24a0e'], [0.6, '#ff9a1e'], [1, '#ffd24a']], wob: 1.2, r: 5.2, len: 11, every: 2400, g: 210 },
+  water: { stops: [[0.05, 'rgba(59,182,246,0.68)'], [0.46, 'rgba(15,92,201,0.65)'], [1, 'rgba(11,73,184,0.72)']], wob: 1.7, r: 4.6, len: 15, every: 1500, g: 520 },
+  lava: { stops: [[0.08, 'rgba(20,5,4,0.62)'], [0.3, 'rgba(76,16,5,0.66)'], [0.44, 'rgba(226,74,14,0.72)'], [0.6, 'rgba(255,154,30,0.75)'], [1, 'rgba(255,210,74,0.8)']], wob: 1.2, r: 5.2, len: 11, every: 2400, g: 210 },
 };
-const ICE = [[0.08, '#f4fbff'], [0.44, '#b9def8'], [0.62, '#8fc8f0'], [1, '#e6f5ff']];
+const ICE = [[0.08, 'rgba(244,251,255,0.64)'], [0.44, 'rgba(185,222,248,0.62)'], [0.62, 'rgba(143,200,240,0.64)'], [1, 'rgba(230,245,255,0.68)']];
 function sceneGrad(g, stops, off) {          // one vertical gradient shared by the outside and the inside of the pill
   const gr = g.createLinearGradient(0, -off, 0, 96 - off);
   for (const [p, c] of stops) gr.addColorStop(p, c);
@@ -988,7 +1013,7 @@ function drawGoo(t, dt, on, live) {
   if (!gooOn) { gooOn = true; goo.style.opacity = 1; }
   const g = gooG, W = island.clientWidth, cx = goo.width / 2;
   g.clearRect(0, 0, goo.width, goo.height);
-  g.fillStyle = '#000';
+  g.fillStyle = 'rgba(5, 6, 10, 0.68)';
   // the outline itself is a slow wave all the way round, so no straight edge is left however wide the pill is
   const L = 2 * Math.max(0, W - SKY_H) + Math.PI * SKY_H;
   g.beginPath();
@@ -1174,18 +1199,106 @@ function drawLook(t, dt, live) {
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 }
 const barsC = $('#bars'), barsG = barsC.getContext('2d');
-const dragSparks = [];
-let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0;
-function drawDragSparks(dt, preserveCanvas) {
+const dragSparks = [], dragStreaks = [], edgeSweeps = [];
+let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0, mergePullActive = false, lastFxCleared = false;
+function accentCols() {
+  const cs = getComputedStyle(document.documentElement);
+  return {
+    c1: cs.getPropertyValue('--c1').trim() || '#6a45ff',
+    c2: cs.getPropertyValue('--c2').trim() || '#9466ff',
+    c3: cs.getPropertyValue('--c3').trim() || '#c08cff',
+  };
+}
+function spawnEdgeSweep(power = 0.85, isMerge = false) {
+  const { c2, c3 } = accentCols();
+  edgeSweeps.push({
+    cx: fx.width / 2,
+    r: Math.max(24, island.clientWidth * 0.35),
+    maxR: isMerge ? 345 : 220 + power * 115,
+    speed: isMerge ? 1480 : 1080 + power * 360,
+    life: 1,
+    fade: isMerge ? 2.6 : 3.2,
+    col1: isMerge ? '#7dd3fc' : c3,
+    col2: c2,
+    isMerge,
+  });
+}
+function drawDragFX(dt, preserveCanvas) {
   const f = fxG;
   if (!preserveCanvas) f.clearRect(0, 0, fx.width, fx.height);
+  // 1) Fast neon bezel light sweep along the top edge of the monitor
+  for (let i = edgeSweeps.length - 1; i >= 0; i--) {
+    const wv = edgeSweeps[i];
+    wv.r += wv.speed * dt;
+    wv.life -= dt * wv.fade;
+    if (wv.life <= 0 || wv.r > wv.maxR) { edgeSweeps.splice(i, 1); continue; }
+    const a = clamp(wv.life, 0, 1);
+    const len = Math.min(95, wv.r * 0.45);
+    const yBeam = 8.5;
+    for (const dir of [-1, 1]) {
+      const tip = wv.cx + dir * wv.r;
+      const tail = wv.cx + dir * Math.max(0, wv.r - len);
+      const grad = f.createLinearGradient(tail, yBeam, tip, yBeam);
+      grad.addColorStop(0, 'rgba(255,255,255,0)');
+      grad.addColorStop(0.6, wv.col1);
+      grad.addColorStop(1, '#ffffff');
+      f.save();
+      f.globalAlpha = a * (wv.isMerge ? 0.95 : 0.78);
+      f.strokeStyle = grad;
+      f.shadowColor = wv.col1;
+      f.shadowBlur = wv.isMerge ? 12 : 8;
+      f.lineWidth = wv.isMerge ? 2.4 : 1.9;
+      f.lineCap = 'round';
+      f.beginPath(); f.moveTo(tail, yBeam); f.lineTo(tip, yBeam); f.stroke();
+      f.restore();
+    }
+    // Luminous pulse halo tightly wrapping the pill on arrival
+    if (wv.life > 0.45) {
+      const ha = clamp((wv.life - 0.45) / 0.55, 0, 1);
+      const pw = island.clientWidth + (1 - ha) * 44;
+      f.save();
+      f.globalAlpha = ha * (wv.isMerge ? 0.52 : 0.32);
+      f.strokeStyle = wv.col1;
+      f.shadowColor = wv.col2;
+      f.shadowBlur = 14;
+      f.lineWidth = 1.6;
+      f.beginPath();
+      f.roundRect(wv.cx - pw / 2, 7.5 - (1 - ha) * 1.5, pw, 37 + (1 - ha) * 3, 20);
+      f.stroke();
+      f.restore();
+    }
+  }
+  // 2) Velocity comet streaks trailing the capsule
+  for (let i = dragStreaks.length - 1; i >= 0; i--) {
+    const s = dragStreaks[i];
+    s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt * 3.4;
+    if (s.life <= 0) { dragStreaks.splice(i, 1); continue; }
+    const norm = Math.hypot(s.vx, s.vy) || 1;
+    const tx = s.x - (s.vx / norm) * s.len * clamp(s.life, 0.2, 1);
+    const ty = s.y - (s.vy / norm) * s.len * clamp(s.life, 0.2, 1);
+    const g = f.createLinearGradient(tx, ty, s.x, s.y);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(1, s.col);
+    f.save();
+    f.globalAlpha = clamp(s.life, 0, 1) * 0.72;
+    f.strokeStyle = g;
+    f.lineWidth = s.w;
+    f.lineCap = 'round';
+    f.beginPath(); f.moveTo(tx, ty); f.lineTo(s.x, s.y); f.stroke();
+    f.restore();
+  }
+  // 3) Glowing star sparks & absorption motes
   for (let i = dragSparks.length - 1; i >= 0; i--) {
     const s = dragSparks[i];
-    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 38 * dt; s.life -= dt * 2.4;
+    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 42 * dt; s.life -= dt * (s.fade || 2.3);
     if (s.life <= 0) { dragSparks.splice(i, 1); continue; }
-    f.globalAlpha = clamp(s.life, 0, 1) * 0.7;
+    f.save();
+    f.globalAlpha = clamp(s.life, 0, 1) * 0.85;
     f.fillStyle = s.col;
-    f.beginPath(); f.arc(s.x, s.y, s.r, 0, 6.283); f.fill();
+    f.shadowColor = s.col;
+    f.shadowBlur = 5;
+    f.beginPath(); f.arc(s.x, s.y, s.r * clamp(s.life + 0.3, 0.4, 1.2), 0, 6.283); f.fill();
+    f.restore();
   }
   f.globalAlpha = 1;
 }
@@ -1193,40 +1306,47 @@ let idleFrames = 0, lastT = 0, lastPaint = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const playing = st.media.playing && musicOn();
-  const look = st.skin !== 'black' ? st.skin : playing && st.visuals && st.react ? 'sky' : null;      // one theme for everything; plain black gets the night sky while music plays
+  const hasDragFx = !!(dragSparks.length || dragStreaks.length || edgeSweeps.length);
+  const look = st.skin !== 'black' ? st.skin : playing && st.visuals && st.react ? 'sky' : null;
   if (look !== lookNow) {
-    if (look && lookNow) skyA = Math.min(skyA, 0.2);       // one skin gives way to another: fade the new one in
+    if (look && lookNow) skyA = Math.min(skyA, 0.2);
     lookNow = look; applyPal();
   }
   if (look) lookDrawn = look;
   skyA += ((look ? 1 : 0) - skyA) * 0.07;
   island.classList.toggle('sky', skyA > 0.4);
   paintSeek();
-  if (!playing && energy < 0.004 && !st.pillDrag && !dragSparks.length) {
+  if (!playing && energy < 0.004 && !st.pillDrag && !mergePullActive && !hasDragFx) {
     if (skyA < 0.01) {
-      if (idleFrames++ === 2) { drawAura(t, 0, false); glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
+      if (idleFrames++ === 2) { drawAura(t, 0, false); if (!lastFxCleared) { fxG.clearRect(0, 0, fx.width, fx.height); lastFxCleared = true; } glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
       lastT = t;
       return;
     }
     if (st.tucked) { drawAura(t, 0, false); return; }
-    if (t - lastPaint < (aura ? 24 : 45)) return;       // a resting skin moves slowly: about 20 frames a second is plenty
+    if (t - lastPaint < (aura ? 28 : 50)) return;
   }
-  idleFrames = 0;
+  idleFrames = 0; lastFxCleared = false;
   const dt = Math.min(0.05, (t - lastT) / 1000); lastT = t; lastPaint = t;
   sampleLevels(t, playing);
 
-  if (!st.pillDrag && !dragGlowActive) {
+  if (!st.pillDrag && !dragGlowActive && !mergePullActive) {
     glow.style.opacity = playing && st.react && (!aura || aura === 'lava') ? (skyA * clamp(0.1 + bass * 0.34, 0, 0.42)).toFixed(3) : 0;
     glow.style.transform = `scale(${(1 + bass * 0.1).toFixed(3)}, ${(1 + bass * 0.45).toFixed(3)})`;
   }
+  if (playing && st.react && cur === 'idle' && st.face === 'eyes') {
+    face.style.setProperty('--es', (1 + bass * 0.11).toFixed(3));
+  } else {
+    face.style.setProperty('--es', '1');
+  }
   if (st.react) { drawLook(t, dt, playing); drawAura(t, dt, playing); }
-  else {            // the theme stays calm: for a moment the painters see silence
+  else {
     const keep = levels.slice(), b = bass, bs = bassSlow, e = energy;
     levels.fill(0); bass = 0; bassSlow = 0; energy = 0;
     drawLook(t, dt, false); drawAura(t, dt, false);
     levels.set(keep); bass = b; bassSlow = bs; energy = e;
   }
-  if (dragSparks.length) drawDragSparks(dt, !!aura);
+  if (hasDragFx) drawDragFX(dt, !!aura);
+  else if (!aura && !lastFxCleared) { fxG.clearRect(0, 0, fx.width, fx.height); lastFxCleared = true; }
 
   if (cur === 'media') {
     const w = barsC.width, h = barsC.height, n = 5, bw = 6, gap = 5, x0 = (w - (n * bw + (n - 1) * gap)) / 2;
@@ -1305,7 +1425,8 @@ $('#t-date').addEventListener('click', () => {
   window.qazi.setCalendar(st.calendar); tick(); render();
 });
 const mmss = (ms) => { const s = Math.ceil(ms / 1000), h = Math.floor(s / 3600); return (h ? h + ':' : '') + pad(Math.floor(s % 3600 / 60)) + ':' + pad(s % 60); };
-function tick() {
+let lastTickMin = '', lastTickDay = '', lastTimerTxt = '';
+function tick(forceDate) {
   const d = new Date(), hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
   const left = timer.running ? Math.max(0, timer.endAt - Date.now()) : timer.left;
   if (timer.running && left <= 0) {
@@ -1313,32 +1434,58 @@ function tick() {
     beep(); showNotif({ app: 'Timer', title: 'Time is up', body: '' });
   }
   const it = $('#i-time');
-  it.textContent = timer.running ? mmss(left) : hm;
-  it.classList.toggle('count', timer.running);
+  const timerTxt = timer.running ? mmss(left) : hm;
+  if (timerTxt !== lastTimerTxt || forceDate) {
+    lastTimerTxt = timerTxt;
+    it.textContent = timerTxt;
+    it.classList.toggle('count', timer.running);
+    $('#tm-time').textContent = mmss(left);
+    $('#tm-time').classList.toggle('done', timer.done);
+    $('#m-timer').textContent = timer.running ? mmss(left) : '';
+    views.media.classList.toggle('timing', timer.running);
+    setIcon($('#tm-start'), timer.running ? 'pause' : 'play');
+  }
+  if (hm !== lastTickMin || forceDate) {
+    lastTickMin = hm;
+    $('#t-time').textContent = hm;
+  }
   views.idle.classList.toggle('faceon', st.face === 'eyes' && !timer.running);
-  $('#t-time').textContent = hm;
-  const dt = dateText(d), td = $('#t-date');
-  if (td.textContent !== dt) td.textContent = dt;
-  $('#tm-time').textContent = mmss(left);
-  $('#tm-time').classList.toggle('done', timer.done);
-  $('#m-timer').textContent = timer.running ? mmss(left) : '';
-  views.media.classList.toggle('timing', timer.running);
-  setIcon($('#tm-start'), timer.running ? 'pause' : 'play');
+  const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${st.calendar}`;
+  if (dayKey !== lastTickDay || forceDate) {
+    lastTickDay = dayKey;
+    const dt = dateText(d), td = $('#t-date');
+    td.dir = st.calendar === 'shamsi-fa' ? 'rtl' : 'ltr';
+    if (td.textContent !== dt) td.textContent = dt;
+  }
 }
-setInterval(tick, 200);
+setInterval(() => tick(false), 250);
 
+function batSvg(pct, chg) {
+  const w = clamp((pct / 100) * 10.5, 1.2, 10.5).toFixed(1);
+  const fill = chg ? '#4ade80' : pct <= 15 ? '#ff5d6c' : pct <= 25 ? '#ffb84d' : '#ffffff';
+  const bolt = chg ? '<path class="bat-bolt" fill="#ffffff" d="M8.5 1.2L5.7 5.6h2.1l-.8 4.2 2.9-4.5H7.8z"/>' : '';
+  return `<svg viewBox="0 0 18 11" aria-hidden="true"><rect x=".7" y="1.4" width="14" height="8.2" rx="2.2" fill="none" stroke="currentColor" stroke-opacity=".55" stroke-width="1.2"/><rect x="15.3" y="3.7" width="1.7" height="3.6" rx=".8" fill="currentColor" fill-opacity=".55"/><rect x="2.4" y="3.1" width="${w}" height="4.8" rx="1" fill="${fill}"/>${bolt}</svg>`;
+}
 if (navigator.getBattery) {
   navigator.getBattery().then((b) => {
     let warned = false;
     b.addEventListener('chargingchange', () => {       // charger plugged in / pulled out
       if (!st.deviceAlerts) return;
       const pct = Math.round(b.level * 100) + '%';
-      if (b.charging) showHud('bolt', 'Charging', pct, 2600, 'green pop'); else showHud('plug', 'On battery', pct, 2400, 'faded');
+      if (b.charging) { showHud('bolt', 'Charging', pct, 2600, 'green pop'); emote('happy', 750); }
+      else showHud('plug', 'On battery', pct, 2400, 'faded');
     });
     const paint = () => {
       const pct = Math.round(b.level * 100);
+      const tb = $('#t-bat');
       // desktops report a permanently full, charging battery — don't show that
-      $('#t-bat').textContent = b.charging && pct === 100 ? '' : pct + '%' + (b.charging ? ' ⚡' : '');
+      if (b.charging && pct === 100) {
+        tb.innerHTML = '';
+        tb.className = 'bat-chip dim';
+      } else {
+        tb.className = 'bat-chip' + (b.charging ? ' chg' : pct <= 15 ? ' crit' : pct <= 25 ? ' low' : '');
+        tb.innerHTML = batSvg(pct, b.charging) + `<span>${pct}%</span>`;
+      }
       if (!b.charging && b.level <= 0.15 && !warned) { warned = true; showNotif({ app: 'Battery', title: 'Low battery', body: pct + '% left — plug in your charger' }); }
       if (b.charging) warned = false;
     };
@@ -1971,6 +2118,7 @@ const blink = () => emote('blink', 130);
 })();
 // the eyes follow the cursor a little when it comes near
 window.qazi.onCursor(({ x, y }) => {
+  if (st.pillDrag || mergePullActive) return;
   const dx = x - window.innerWidth / 2, dy = y - 26, d = Math.hypot(dx, dy);
   const k = d < 420 && d > 1 ? Math.min(1, d / 120) : 0;
   face.style.setProperty('--lx', (k ? dx / d * 2.4 * k : 0).toFixed(2) + 'px');
@@ -2125,20 +2273,55 @@ window.qazi.onClip((c) => {
 window.qazi.onDownload((d) => {
   showNotif({ app: 'Download finished', title: d.name, body: d.size + (d.risky ? ' · click to show in folder' : ' · click to open'), icon: d.icon, action: 'download', path: d.path });
 });
-// ------------------------------------------------------------ multi-monitor switch, glanceable laptop mode & elastic drag
-function spawnDragSparks(vx, magnet) {
-  if (dragSparks.length > 26 || (Math.abs(vx) < 2 && magnet < 0.3)) return;
+// ------------------------------------------------------------ multi-monitor switch, slingshot drag, & magnetic fusion
+function spawnDragSparks(vx, vy, magnet, hot) {
+  const spd = Math.hypot(vx, vy);
+  const { c3 } = accentCols();
+  const col = hot ? '#7dd3fc' : magnet > 0.35 ? c3 : 'rgba(255,255,255,.92)';
+  if (spd > 5 && dragStreaks.length < 22) {
+    const W = island.clientWidth, cx = fx.width / 2, nx = -vx / spd, ny = -vy / spd;
+    dragStreaks.push({
+      x: cx + nx * (W * 0.25 + Math.random() * 14) + (Math.random() - 0.5) * 16,
+      y: 26 + ny * 8 + (Math.random() - 0.5) * 20,
+      vx: nx * (60 + spd * 3.6),
+      vy: ny * (60 + spd * 3.6),
+      len: clamp(10 + spd * 1.15, 10, 44),
+      w: hot ? 1.8 : 1.35,
+      life: 0.9,
+      col,
+    });
+  }
+  if (dragSparks.length > 36 || (spd < 2.5 && magnet < 0.28 && !hot)) return;
   const W = island.clientWidth, cx = fx.width / 2, dir = vx >= 0 ? -1 : 1;
-  const n = Math.abs(vx) > 10 ? 2 : 1;
+  const n = spd > 12 || hot ? 2 : 1;
   for (let i = 0; i < n; i++) {
     dragSparks.push({
-      x: cx + dir * (W * 0.35 + Math.random() * 14),
+      x: cx + dir * (W * 0.32 + Math.random() * 14),
       y: 12 + Math.random() * 28,
-      vx: dir * (16 + Math.abs(vx) * 2.2) + (Math.random() - 0.5) * 18,
-      vy: (Math.random() - 0.5) * 24,
-      r: 0.9 + Math.random() * 1.1,
-      life: 0.75 + Math.random() * 0.25,
-      col: magnet > 0.35 ? getComputedStyle(document.documentElement).getPropertyValue('--c3').trim() || '#c08cff' : 'rgba(255,255,255,.9)',
+      vx: dir * (20 + Math.abs(vx) * 2.4) + (Math.random() - 0.5) * 24,
+      vy: -vy * 1.1 + (Math.random() - 0.5) * 26,
+      r: 0.9 + Math.random() * 1.3,
+      life: 0.78 + Math.random() * 0.24,
+      fade: 2.2,
+      col,
+    });
+  }
+}
+function spawnRadialBurst(count, isMerge) {
+  const { c2, c3 } = accentCols();
+  const cx = fx.width / 2;
+  for (let i = 0; i < count; i++) {
+    const ang = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.35;
+    const spd = (isMerge ? 115 : 75) + Math.random() * (isMerge ? 140 : 85);
+    dragSparks.push({
+      x: cx + Math.cos(ang) * 18,
+      y: 25 + Math.sin(ang) * 9,
+      vx: Math.cos(ang) * spd,
+      vy: Math.sin(ang) * spd * 0.52 + 12,
+      r: (isMerge ? 1.3 : 1.0) + Math.random() * 1.2,
+      life: 0.9 + Math.random() * 0.25,
+      fade: isMerge ? 1.85 : 2.3,
+      col: isMerge ? (i % 2 ? '#7dd3fc' : c3) : (i % 2 ? '#ffffff' : c2),
     });
   }
 }
@@ -2169,35 +2352,123 @@ window.qazi.onDragFx((d) => {
   if (!d) return;
   if (d.active) {
     st.pillDrag = true;
-    island.classList.add('grabbing'); island.classList.remove('snapping');
-    const sx = 1 + Math.min(0.13, Math.abs(d.vx || 0) * 0.0042);
-    const sy = 1 / Math.sqrt(sx) + clamp((d.pullY || 0) * 0.0022, 0, 0.08);
-    const rot = clamp((d.vx || 0) * 0.14, -3.5, 3.5);
+    const vx = d.vx || 0, vy = d.vy || 0, spd = Math.hypot(vx, vy);
+    if (d.absorbing) {
+      const p = clamp(d.absorbProgress || 0, 0, 1);
+      island.classList.add('absorbing'); island.classList.remove('grabbing', 'snapping');
+      const sc = clamp(1 - p * 0.72, 0.22, 1);
+      island.style.transform = `translateX(-50%) scale(${sc.toFixed(3)})`;
+      island.style.opacity = clamp(1 - p * 0.86, 0.08, 1).toFixed(3);
+      glow.classList.add('drag-glow');
+      glow.style.opacity = clamp(0.4 + p * 0.45, 0, 0.85).toFixed(3);
+      glow.style.transform = `scale(${(1.1 + p * 0.3).toFixed(3)})`;
+      spawnDragSparks(vx, vy, 1, true);
+      return;
+    }
+    island.classList.add('grabbing'); island.classList.remove('snapping', 'absorbing');
+    island.style.opacity = '';
+    const sx = 1 + Math.min(0.14, Math.abs(vx) * 0.0044);
+    const sy = 1 / Math.sqrt(sx) + clamp((d.pullY || 0) * 0.00055, 0, 0.09);
+    const rot = clamp(vx * 0.14, -4.2, 4.2);
     island.style.transform = `translateX(-50%) scale(${sx.toFixed(3)}, ${sy.toFixed(3)}) rotate(${rot.toFixed(2)}deg)`;
-    const mag = d.magnet || 0;
+    const mag = Math.max(d.magnet || 0, d.merge || 0);
     dragGlowActive = true;
     glow.classList.add('drag-glow');
-    glow.style.opacity = clamp(0.14 + mag * 0.34, 0, 0.48).toFixed(3);
-    glow.style.transform = `scale(${(1 + mag * 0.14).toFixed(3)}, ${(1 + mag * 0.35).toFixed(3)})`;
-    spawnDragSparks(d.vx || 0, mag);
+    glow.style.opacity = clamp(0.16 + mag * 0.44 + Math.min(0.18, spd * 0.006), 0, 0.65).toFixed(3);
+    glow.style.transform = `scale(${(1 + mag * 0.18).toFixed(3)}, ${(1 + mag * 0.38).toFixed(3)})`;
+    if (cur === 'idle' && st.face === 'eyes') {
+      face.style.setProperty('--lx', clamp(vx * 0.14, -3.6, 3.6).toFixed(2) + 'px');
+      face.style.setProperty('--ly', clamp(vy * 0.12, -2.4, 2.4).toFixed(2) + 'px');
+      face.classList.toggle('wind', spd > 14);
+      face.classList.toggle('merge-watch', !!d.mergeHot && spd <= 14);
+    }
+    spawnDragSparks(vx, vy, mag, !!d.mergeHot);
   } else {
     st.pillDrag = false;
-    island.classList.remove('grabbing'); island.classList.add('snapping');
+    island.style.opacity = '';
+    island.classList.remove('grabbing', 'absorbing'); island.classList.add('snapping');
     island.style.transform = '';
-    setTimeout(() => island.classList.remove('snapping'), 420);
+    face.classList.remove('wind', 'merge-watch');
+    setTimeout(() => island.classList.remove('snapping'), 480);
   }
 });
 window.qazi.onPillLanded((p) => {
   st.pillDrag = false;
-  island.classList.remove('grabbing');
+  island.style.opacity = '';
+  island.classList.remove('grabbing', 'absorbing', 'snapping');
   island.style.transform = '';
+  face.classList.remove('wind', 'merge-watch');
   bump();
+  const imp = clamp(Number(p && p.impact) || 0.5, 0.25, 1);
+  if ((p && p.switched) || imp >= 0.3) spawnEdgeSweep(imp, false);
+  spawnRadialBurst((p && p.switched) ? 14 : Math.round(6 + imp * 8), false);
+  if ((p && p.switched) || imp > 0.62) emote('happy', 680);
   clearTimeout(dragGlowT);
   dragGlowActive = true;
   glow.classList.add('drag-glow');
-  glow.style.opacity = p && p.switched ? '0.42' : '0.24';
-  glow.style.transform = 'scale(1.12, 1.25)';
-  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 320);
+  glow.style.opacity = clamp((p && p.switched ? 0.52 : 0.3) + imp * 0.16, 0, 0.68).toFixed(3);
+  glow.style.transform = `scale(${(1.12 + imp * 0.12).toFixed(3)}, ${(1.25 + imp * 0.16).toFixed(3)})`;
+  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 360);
+});
+window.qazi.onMergePull((p) => {
+  if (p && p.active) {
+    mergePullActive = true;
+    const ch = clamp(p.charge || 0, 0, 1), dir = clamp(p.dir || 0, -1, 1);
+    island.classList.add('merge-pull');
+    const lx = (dir * (3 + ch * 11)).toFixed(1), sc = (1 + ch * 0.055).toFixed(3);
+    island.style.transform = `translateX(calc(-50% + ${lx}px)) scale(${sc})`;
+    dragGlowActive = true;
+    glow.classList.add('drag-glow');
+    glow.style.opacity = clamp(0.26 + ch * 0.44, 0, 0.72).toFixed(3);
+    glow.style.transform = `translateX(${(dir * 8).toFixed(1)}px) scale(${(1.12 + ch * 0.18).toFixed(3)}, ${(1.28 + ch * 0.25).toFixed(3)})`;
+    if (cur === 'idle' && st.face === 'eyes') {
+      face.classList.add('merge-watch');
+      face.style.setProperty('--lx', (dir * 3.2).toFixed(2) + 'px');
+      face.style.setProperty('--ly', '-0.6px');
+    }
+    if (p.hot && dragSparks.length < 24 && Math.random() < 0.38) {
+      dragSparks.push({
+        x: fx.width / 2 + dir * (island.clientWidth * 0.45 + 32),
+        y: 24 + (Math.random() - 0.5) * 18,
+        vx: -dir * (48 + Math.random() * 44),
+        vy: (Math.random() - 0.5) * 12,
+        r: 1.2 + Math.random() * 1.1,
+        life: 0.7,
+        fade: 2.6,
+        col: '#7dd3fc',
+      });
+    }
+  } else {
+    mergePullActive = false;
+    island.classList.remove('merge-pull');
+    island.style.transform = '';
+    face.classList.remove('merge-watch');
+    if (!st.pillDrag) {
+      dragGlowActive = false;
+      glow.classList.remove('drag-glow');
+      glow.style.opacity = 0;
+    }
+  }
+});
+window.qazi.onMergeComplete((p) => {
+  mergePullActive = false;
+  st.pillDrag = false;
+  island.classList.remove('merge-pull', 'grabbing', 'absorbing');
+  island.style.transform = '';
+  face.classList.remove('merge-watch', 'wind');
+  island.classList.remove('merge-burst'); void island.offsetWidth; island.classList.add('merge-burst');
+  setTimeout(() => island.classList.remove('merge-burst'), 580);
+  bump();
+  const imp = clamp(Number(p && p.impact) || 0.85, 0.5, 1.2);
+  spawnEdgeSweep(imp, true);
+  spawnRadialBurst(22, true);
+  emote('happy', 950);
+  clearTimeout(dragGlowT);
+  dragGlowActive = true;
+  glow.classList.add('drag-glow');
+  glow.style.opacity = '0.72';
+  glow.style.transform = 'scale(1.36, 1.52)';
+  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 460);
 });
 
 let dragWatch = null;
