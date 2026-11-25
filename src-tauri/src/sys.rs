@@ -42,9 +42,17 @@ pub fn emit<S: serde::Serialize + Clone>(event: &str, payload: S) {
         let _ = a.emit(event, payload);
     }
 }
+pub fn emit_to<S: serde::Serialize + Clone>(label: &str, event: &str, payload: S) {
+    if let Some(a) = APP.get() {
+        let _ = a.emit_to(label, event, payload);
+    }
+}
 /// Messages on the "helper" channel keep the shape the page already understands: { t: "...", ... }.
 pub fn helper(v: Value) {
     emit("helper", v)
+}
+pub fn helper_to(label: &str, v: Value) {
+    emit_to(label, "helper", v)
 }
 
 pub fn now_ms() -> u64 {

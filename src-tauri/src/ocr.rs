@@ -241,7 +241,7 @@ fn read_persian(px: &[u8], w: i32, h: i32) -> Option<String> {
     let png = sys::encode_png(&rgba, w as u32, h as u32)?;
     let (tx, rx) = mpsc::channel();
     *REPLY.lock().unwrap() = Some(tx);
-    sys::emit("ocr-read", json!({ "png": sys::b64(&png) }));
+    sys::emit_to("main", "ocr-read", json!({ "png": sys::b64(&png) }));
     let text = rx.recv_timeout(Duration::from_secs(25)).ok()?;
     // Persian spelling of the letters the model sometimes writes the Arabic way
     Some(text.chars().map(|c| match c { 'ي' | 'ى' => 'ی', 'ك' => 'ک', ',' => '،', _ => c }).collect::<String>().trim().to_string())

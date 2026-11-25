@@ -7,6 +7,7 @@ const quiet = (p) => p.catch(() => {});
 
 // dropped files come without paths; the host turns the file objects back into paths
 let dropSeq = 0;
+const dropId = Math.random().toString(36).slice(2, 6);
 const dropWait = new Map();
 listen('drop-paths', (e) => { const done = dropWait.get(e.payload.token); if (done) { dropWait.delete(e.payload.token); done(e.payload.paths || []); } });
 
@@ -14,10 +15,15 @@ window.qazi = {
   onCursor: on('cursor'), onHelper: on('helper'), onSettings: on('settings'), onClip: on('clip'), onDownload: on('download'),
   onShelf: on('shelf'), onShelfDragging: on('shelf-dragging'), onClips: on('clips'), onLevels: on('levels'),
   onPress: on('press'), onRelease: on('release'), onOpen: on('open'), onHotkey: on('hotkey'), onNotes: on('notes'), onVault: on('vault'), onOcr: on('ocr'), onOcrRead: on('ocr-read'), onSpeedo: on('speedo'),
+  onMonitorState: on('monitor-state'), onDragFx: on('drag-fx'), onPillLanded: on('pill-landed'),
 
   setInteractive: (v) => quiet(invoke('set_interactive', { on: !!v })),
   setTyping: (v, restore) => invoke('set_typing', { on: !!v, restore: !!restore }).catch(() => ({})),
   lostClick: (info) => quiet(invoke('lost_click', { info: String(info) })),
+  pillDragStart: () => quiet(invoke('pill_drag_start')),
+  switchMonitor: () => quiet(invoke('switch_monitor')),
+  getMonitorState: () => invoke('monitor_state').catch(() => null),
+  toggleDual: () => quiet(invoke('toggle_dual')),
 
   media: (cmd) => quiet(invoke('media', { cmd })),
   seek: (ms) => quiet(invoke('seek', { ms })),
@@ -34,7 +40,7 @@ window.qazi = {
     return new Promise((resolve) => {
       const list = [...files];
       if (!list.length || !(window.chrome && chrome.webview && chrome.webview.postMessageWithAdditionalObjects)) { resolve(list.map(() => '')); return; }
-      const token = 'd' + (++dropSeq);
+      const token = dropId + '-' + (++dropSeq);
       dropWait.set(token, resolve);
       setTimeout(() => { if (dropWait.delete(token)) resolve(list.map(() => '')); }, 1500);
       try { chrome.webview.postMessageWithAdditionalObjects('island-drop:' + token, list); } catch { dropWait.delete(token); resolve(list.map(() => '')); }

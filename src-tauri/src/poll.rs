@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::media::{wait, Media};
 use crate::notif::Notifs;
-use crate::{audio, clip, net, sys};
+use crate::{audio, clip, hit, net, sys};
 
 pub enum Cmd {
     Toggle,
@@ -28,6 +28,7 @@ pub enum Cmd {
     Dismiss(u32),
     ClearAll,
     Act(String, String),
+    Resync,
 }
 static TX: OnceLock<Mutex<Sender<Cmd>>> = OnceLock::new();
 pub fn send(c: Cmd) {
@@ -36,10 +37,12 @@ pub fn send(c: Cmd) {
     }
 }
 
-// ---------------------------------------------------------------- is an app window sitting where the island lives?
+// ---------------------------------------------------------------- is an app window sitting where an island lives?
 /// 1 = an app window, 0 = bare desktop, -1 = the island itself (unknown)
-unsafe fn cover_state(me: u32) -> i32 {
-    let h = sys::hwnd();
+unsafe fn cover_state_for(me: u32, h: HWND) -> i32 {
+    if h.0.is_null() {
+        return 0;
+    }
     let r = sys::rect_of(h);
     let scale = GetDpiForWindow(h).max(96) as f64 / 96.0;
     let pt = POINT { x: (r.left + r.right) / 2, y: r.top + (26.0 * scale) as i32 };
@@ -54,8 +57,8 @@ unsafe fn cover_state(me: u32) -> i32 {
     let c = sys::class_of(root);
     if c == "Progman" || c == "WorkerW" { 0 } else { 1 }
 }
-/// true when the active window fills the whole primary screen (a movie, a game, a presentation)
-unsafe fn foreground_fullscreen(me: u32) -> bool {
+/// true when the active window fills the entire monitor that this island lives on
+unsafe fn foreground_fullscreen_for(me: u32, island_h: HWND) -> bool {
     let h = GetForegroundWindow();
     if h.0.is_null() || sys::pid_of(h) == me {
         return false;
@@ -64,11 +67,16 @@ unsafe fn foreground_fullscreen(me: u32) -> bool {
     if c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" {
         return false;
     }
-    let r = sys::rect_of(h);
-    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-    if !GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut mi).as_bool() || mi.dwFlags & 1 == 0 {
-        return false; // the island lives on the primary screen only
+    let fg_mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+    let island_mon = MonitorFromWindow(island_h, MONITOR_DEFAULTTONEAREST);
+    if fg_mon.0 != island_mon.0 {
+        return false;
     }
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !GetMonitorInfoW(fg_mon, &mut mi).as_bool() {
+        return false;
+    }
+    let r = sys::rect_of(h);
     let m = mi.rcMonitor;
     r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
 }
@@ -138,7 +146,7 @@ pub fn start() {
         let mut watch = net::Watch::new();
         let mut last_vol = String::new();
         let mut clip_seq = clip::sequence();
-        let (mut cover_sent, mut cover_last) = (-1, -1);
+        let mut cover_map: HashMap<String, (i32, i32)> = HashMap::new();
         let start = Instant::now();
         let mut due: HashMap<&str, Instant> = HashMap::new();
         let mut every = |name: &'static str, ms: u64| -> bool {
@@ -179,6 +187,7 @@ pub fn start() {
             }
             if !cmds.is_empty() {
                 let last_v = cmds.iter().rposition(|c| matches!(c, Cmd::Vol(_)));
+                let mut resync = false;
                 for (i, c) in cmds.into_iter().enumerate() {
                     match c {
                         Cmd::Toggle => media.toggle(),
@@ -194,10 +203,18 @@ pub fn start() {
                         Cmd::Dismiss(id) => notifs.dismiss(id),
                         Cmd::ClearAll => notifs.clear_all(),
                         Cmd::Act(id, aumid) => notifs.activate(&id, &aumid),
+                        Cmd::Resync => resync = true,
                     }
                 }
+                if resync {
+                    media.reset_thumb();
+                    watch.resync();
+                    cover_map.clear();
+                    watch.poll_net();
+                    watch.poll_sensors();
+                }
                 media.poll();
-                volume(false, &mut last_vol);
+                volume(resync, &mut last_vol);
             }
             if every("media", 500) {
                 media.poll();
@@ -212,16 +229,19 @@ pub fn start() {
                 notifs.poll_telegram();
             }
             if every("cover", 300) {
-                let s = cover_state(me);
-                if s >= 0 {
-                    let full = foreground_fullscreen(me);
-                    let s = s + if full { 10 } else { 0 };
-                    // report only once the state has been stable for two polls
-                    if s == cover_last && s != cover_sent {
-                        cover_sent = s;
-                        sys::helper(json!({ "t": "cover", "covered": s % 10 == 1, "full": full }));
+                for (label, ih) in hit::windows_snapshot() {
+                    let s = cover_state_for(me, ih);
+                    if s >= 0 {
+                        let full = foreground_fullscreen_for(me, ih);
+                        let s = s + if full { 10 } else { 0 };
+                        let entry = cover_map.entry(label.clone()).or_insert((-1, -1));
+                        // report only once the state has been stable for two polls
+                        if s == entry.1 && s != entry.0 {
+                            entry.0 = s;
+                            sys::helper_to(&label, json!({ "t": "cover", "covered": s % 10 == 1, "full": full }));
+                        }
+                        entry.1 = s;
                     }
-                    cover_last = s;
                 }
             }
             if every("clip", 300) {

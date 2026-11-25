@@ -130,6 +130,11 @@ impl Watch {
     pub fn new() -> Self {
         Self { net: None, net_seen: None, sensors: None }
     }
+    pub fn resync(&mut self) {
+        self.net = None;
+        self.net_seen = None;
+        self.sensors = None;
+    }
     /// Called every couple of seconds. A network change is reported once two polls in a row agree.
     pub fn poll_net(&mut self) {
         if !settings::flag("netAlerts") {

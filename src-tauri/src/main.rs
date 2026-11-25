@@ -30,20 +30,37 @@ use poll::Cmd;
 
 // ---------------------------------------------------------------- commands: mouse and keyboard
 #[tauri::command]
-fn set_interactive(on: bool) {
-    hit::set_interactive(on)
+fn set_interactive(window: tauri::WebviewWindow, on: bool) {
+    hit::set_interactive(window.label(), on)
 }
 #[tauri::command]
 fn set_typing(window: tauri::WebviewWindow, on: bool, restore: bool) -> Value {
-    let ctx = hit::set_typing(on, restore);
+    let ctx = hit::set_typing(window.label(), on, restore);
     if on {
         let _ = window.set_focus();
     }
     ctx
 }
 #[tauri::command]
-fn lost_click(info: String) {
-    sys::log(&format!("a click reached the island but not the page; performed it anyway ({info})"));
+fn lost_click(window: tauri::WebviewWindow, info: String) {
+    sys::log(&format!("a click reached the island ({}) but not the page; performed it anyway ({info})", window.label()));
+}
+#[tauri::command]
+fn pill_drag_start(window: tauri::WebviewWindow) {
+    hit::pill_drag_start(window.label())
+}
+#[tauri::command]
+fn switch_monitor(window: tauri::WebviewWindow) {
+    hit::switch_monitor(window.label())
+}
+#[tauri::command]
+fn monitor_state(window: tauri::WebviewWindow) -> Value {
+    hit::monitor_state_payload(window.label())
+}
+#[tauri::command]
+fn toggle_dual() {
+    let cur = settings::flag("dualMonitors");
+    settings::apply("dualMonitors", &Value::Bool(!cur));
 }
 
 // ---------------------------------------------------------------- commands: media, volume, notifications
@@ -337,7 +354,7 @@ fn create_tray(app: &tauri::App) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, ev| match ev.id().as_ref() {
-            "settings" => sys::emit("open", "settings"),
+            "settings" => sys::emit_to("main", "open", "settings"),
             "autostart" => {
                 let on = auto.is_checked().unwrap_or(false);
                 settings::put("autoStart", on.into());
@@ -366,6 +383,38 @@ fn start_debug(win: tauri::WebviewWindow, dir: PathBuf) {
     });
 }
 
+pub fn build_island_window(app: &tauri::AppHandle, label: &str) -> tauri::Result<tauri::WebviewWindow> {
+    let mut wb = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
+        .title(sys::APP_NAME)
+        .inner_size(hit::WIN_W, hit::WIN_H)
+        .position(0.0, 0.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false)
+        .disable_drag_drop_handler()
+        // the pill animates and keeps time even when Windows thinks nobody is looking at it
+        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required");
+    if let Some(d) = sys::debug_dir() {
+        wb = wb.data_directory(d.join("webview"));
+    }
+    let win = wb.build()?;
+    hit::register_window(&win);
+    if let Ok(hwnd) = win.hwnd() {
+        unsafe {
+            let _ = ShowWindow(HWND(hwnd.0), SW_SHOWNOACTIVATE);
+        }
+    }
+    shelf::hook_webview(&win);
+    Ok(win)
+}
+
 fn main() {
     let debug = std::env::var_os("ISLAND_DEBUG").map(PathBuf::from);
     let _ = sys::DEBUG_DIR.set(debug.clone());
@@ -378,11 +427,12 @@ fn main() {
     let mut builder = tauri::Builder::default();
     if debug.is_none() {
         // launching the app again opens its settings
-        builder = builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| sys::emit("open", "settings")));
+        builder = builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| sys::emit_to("main", "open", "settings")));
     }
     builder
         .invoke_handler(tauri::generate_handler![
-            set_interactive, set_typing, lost_click, media, seek, set_volume, toggle_mute, set_viz, notif_act, notif_dismiss, notif_clear,
+            set_interactive, set_typing, lost_click, pill_drag_start, switch_monitor, monitor_state, toggle_dual,
+            media, seek, set_volume, toggle_mute, set_viz, notif_act, notif_dismiss, notif_clear,
             clips_get, clip_copy, clip_pin, clip_remove, clips_clear, copy_text,
             shelf_get, shelf_add, shelf_add_data, shelf_add_url, shelf_remove, shelf_clear, shelf_reveal, shelf_drag, open_download,
             settings_get, settings_set, action, open_url, ocr_done, speedo_cmd, update_check, update_install,
@@ -391,34 +441,8 @@ fn main() {
         ])
         .setup(move |app| {
             let _ = sys::APP.set(app.handle().clone());
-            let mut wb = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-                .title(sys::APP_NAME)
-                .inner_size(hit::WIN_W, hit::WIN_H)
-                .position(0.0, 0.0)
-                .decorations(false)
-                .transparent(true)
-                .shadow(false)
-                .resizable(false)
-                .maximizable(false)
-                .minimizable(false)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .focused(false)
-                .visible(false)
-                .disable_drag_drop_handler()
-                // the pill animates and keeps time even when Windows thinks nobody is looking at it
-                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required");
-            if let Some(d) = &debug {
-                wb = wb.data_directory(d.join("webview"));
-            }
-            let win = wb.build()?;
-            sys::set_hwnd(HWND(win.hwnd()?.0));
-            hit::set_interactive(false);
+            let win = build_island_window(app.handle(), "main")?;
             hit::start();
-            unsafe {
-                let _ = ShowWindow(sys::hwnd(), SW_SHOWNOACTIVATE);
-            }
-            shelf::hook_webview(&win);
             create_tray(app)?;
             settings::ensure_autostart();
             std::thread::spawn(|| {
@@ -435,6 +459,9 @@ fn main() {
             notif::scan_shortcuts();
             hit::start_hotkey();
             update::start();
+            if settings::flag("dualMonitors") {
+                hit::sync_windows();
+            }
             // speedo::start();   // parked: Speedo has no control pipe yet, so there is nothing to talk to
             if let Some(d) = debug.clone() {
                 start_debug(win, d);

@@ -25,6 +25,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #island.tucked.full { transform: translateX(-50%) translateY(-48px); }
 #island.tucked .view, #island.tucked #sky { opacity: 0 !important; transition: opacity .12s; }
 #glow.off { display: none; }
+#glow.drag-glow { transition: opacity .15s, transform .22s var(--spring); }
+#island.grabbing { transition: width .5s var(--spring); cursor: grabbing; box-shadow: 0 10px 28px rgba(0, 0, 0, .58), inset 0 0 0 1px rgba(255, 255, 255, .18); }
+#island.grabbing * { cursor: grabbing !important; }
+#island.snapping { transition: width .5s var(--spring), transform .42s var(--spring), box-shadow .35s; }
 #island.bump { animation: bump .5s var(--spring); }
 @keyframes bump { 30% { transform: translateX(-50%) scale(1.07, .96); } }
 #island.sky .view { text-shadow: 0 1px 3px rgba(20, 0, 60, .45); }

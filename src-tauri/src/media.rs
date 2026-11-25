@@ -65,6 +65,10 @@ impl Media {
     pub fn new() -> Self {
         Self { mgr: None, last_key: String::new(), none_sent: false }
     }
+    pub fn reset_thumb(&mut self) {
+        self.last_key.clear();
+        self.none_sent = false;
+    }
 
     fn session(&mut self) -> Option<GlobalSystemMediaTransportControlsSession> {
         if self.mgr.is_none() {

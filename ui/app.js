@@ -54,6 +54,7 @@ const ICONS = {
   search: `<circle ${S} cx="10.5" cy="10.5" r="6"/><path ${S} d="M15 15l5 5"/>`,
   edit: `<path ${S} d="M4.5 19.5h4l10-10-4-4-10 10zM13 7l4 4"/>`,
   gear: `<circle ${S} cx="12" cy="12" r="2.8"/><path ${S} d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4L18 18M18 6l-1.6 1.6M7.6 16.4L6 18"/>`,
+  monitor: `<rect ${S} x="3" y="4" width="18" height="12" rx="2.2"/><path ${S} d="M8 20h8M12 16v4"/>`,
 };
 const svg = (name) => `<svg viewBox="0 0 24 24">${ICONS[name] || ''}</svg>`;
 const setIcon = (el, name) => { if (el.dataset.cur !== name) { el.innerHTML = svg(name); el.dataset.cur = name; } };
@@ -93,6 +94,7 @@ const st = {
   skin: 'black', musicTheme: 'sky',                // what the pill wears at rest / while music plays
   net: { online: true, vpn: '', proxy: false }, sensors: { mic: [], cam: [] },
   smartCopy: true, hudAct: null, muteClipUntil: 0, react: true,
+  onSecondary: false, monitorCount: 1, dualMonitors: false, secondaryAlwaysOpen: true, pillDrag: false,
 };
 // the window takes the mouse only while the cursor is on the island (or a text field is open)
 let mouseSent = null;
@@ -108,6 +110,7 @@ let cur = 'idle';
 // music counts only when it is not a video and nothing is running fullscreen (a film, a game)
 const musicOn = () => st.media.active && !(st.hideVideo && (st.media.video || st.full));
 
+const glanceOpen = () => st.onSecondary && st.secondaryAlwaysOpen;
 function pickView() {
   const now = Date.now();
   if (st.force) return st.force;
@@ -122,12 +125,13 @@ function pickView() {
   if (musicOn() && !st.menuMode && (m.playing || now - st.pausedAt < 12000)) return 'media';
   if (st.hover && now - st.enteredAt > 130) return 'tools';
   if ((st.hover || now - st.leftAt < 380) && cur === 'tools') return 'tools';
-  return 'idle';
+  return glanceOpen() ? 'tools' : 'idle';
 }
 const dragging = () => st.shelfOn && Date.now() - st.dragAt < 350;
 function updateTuck() {
   const now = Date.now();
-  const want = !st.force && (st.full || (st.autoHide && st.covered));
+  const glance = glanceOpen();
+  const want = !st.force && !st.pillDrag && (glance ? (st.full && st.hideVideo) : (st.full || (st.autoHide && st.covered)));
   // dwelling on the very top edge of the screen peeks the island back out
   if (want && st.tucked && st.peekSince && now - st.peekSince > 220) { st.revealUntil = now + 1400; st.peekSince = 0; }
   const reveal = st.notif || now < st.volUntil || now < st.hudUntil || dragging() || st.dragOut || st.scrubbing || st.hover || st.typing || timer.running || (st.shelfOn && st.shelf.length && !st.full) || st.stackOpen || st.manual === 'gen' || now < st.revealUntil || now < st.holdUntil || (!st.tucked && now - st.leftAt < 900);   // a running timer stays on screen, fullscreen or not
@@ -191,7 +195,7 @@ function hoverNow() {
     inside = x >= s.left - 4 && x <= s.right + 4 && y >= r.bottom && y <= s.bottom + 10;
   }
   if (!inside && sideN) { const s = side.getBoundingClientRect(); inside = x >= s.left - 8 && x <= s.right + 4 && y >= s.top - 6 && y <= s.bottom + 6; }
-  if (inside === st.hover || st.dragOut) return false;       // mid-drag the window must not switch to click-through
+  if (inside === st.hover || st.dragOut || st.pillDrag) return false;       // mid-drag the window must not switch to click-through
   st.hover = inside;
   island.classList.toggle('hover', inside && !st.stackOpen && !st.typing);
   syncMouse();
@@ -1170,6 +1174,21 @@ function drawLook(t, dt, live) {
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 }
 const barsC = $('#bars'), barsG = barsC.getContext('2d');
+const dragSparks = [];
+let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0;
+function drawDragSparks(dt, preserveCanvas) {
+  const f = fxG;
+  if (!preserveCanvas) f.clearRect(0, 0, fx.width, fx.height);
+  for (let i = dragSparks.length - 1; i >= 0; i--) {
+    const s = dragSparks[i];
+    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 38 * dt; s.life -= dt * 2.4;
+    if (s.life <= 0) { dragSparks.splice(i, 1); continue; }
+    f.globalAlpha = clamp(s.life, 0, 1) * 0.7;
+    f.fillStyle = s.col;
+    f.beginPath(); f.arc(s.x, s.y, s.r, 0, 6.283); f.fill();
+  }
+  f.globalAlpha = 1;
+}
 let idleFrames = 0, lastT = 0, lastPaint = 0;
 function frame(t) {
   requestAnimationFrame(frame);
@@ -1183,7 +1202,7 @@ function frame(t) {
   skyA += ((look ? 1 : 0) - skyA) * 0.07;
   island.classList.toggle('sky', skyA > 0.4);
   paintSeek();
-  if (!playing && energy < 0.004) {
+  if (!playing && energy < 0.004 && !st.pillDrag && !dragSparks.length) {
     if (skyA < 0.01) {
       if (idleFrames++ === 2) { drawAura(t, 0, false); glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
       lastT = t;
@@ -1196,8 +1215,10 @@ function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000); lastT = t; lastPaint = t;
   sampleLevels(t, playing);
 
-  glow.style.opacity = playing && st.react && (!aura || aura === 'lava') ? (skyA * clamp(0.1 + bass * 0.34, 0, 0.42)).toFixed(3) : 0;
-  glow.style.transform = `scale(${(1 + bass * 0.1).toFixed(3)}, ${(1 + bass * 0.45).toFixed(3)})`;
+  if (!st.pillDrag && !dragGlowActive) {
+    glow.style.opacity = playing && st.react && (!aura || aura === 'lava') ? (skyA * clamp(0.1 + bass * 0.34, 0, 0.42)).toFixed(3) : 0;
+    glow.style.transform = `scale(${(1 + bass * 0.1).toFixed(3)}, ${(1 + bass * 0.45).toFixed(3)})`;
+  }
   if (st.react) { drawLook(t, dt, playing); drawAura(t, dt, playing); }
   else {            // the theme stays calm: for a moment the painters see silence
     const keep = levels.slice(), b = bass, bs = bassSlow, e = energy;
@@ -1205,6 +1226,7 @@ function frame(t) {
     drawLook(t, dt, false); drawAura(t, dt, false);
     levels.set(keep); bass = b; bassSlow = bs; energy = e;
   }
+  if (dragSparks.length) drawDragSparks(dt, !!aura);
 
   if (cur === 'media') {
     const w = barsC.width, h = barsC.height, n = 5, bw = 6, gap = 5, x0 = (w - (n * bw + (n - 1) * gap)) / 2;
@@ -1803,6 +1825,8 @@ const SETTINGS_UI = [
   ['seg', 'calendar', 'Date', [['gregorian', 'Greg.'], ['shamsi', 'Shamsi'], ['shamsi-fa', 'شمسی'], ['both', 'Both']]],
   ['toggle', 'autoHide', 'Hide while a window is underneath'],
   ['toggle', 'hideVideo', 'Stay out of the way for videos'],
+  ['toggle', 'dualMonitors', 'Show on both monitors'],
+  ['toggle', 'secondaryAlwaysOpen', 'Keep open on 2nd monitor'],
   ['swatch', 'skin', 'Theme', ['black', 'nebula', 'crystal', 'ember', 'reactor', 'venom']],        // cloud, water, lava and ice are parked until they are finished
   ['toggle', 'musicReact', 'Theme reacts to music'],
   ['toggle', 'visuals', 'Night sky with music (black theme)'],
@@ -1970,6 +1994,9 @@ const applySettings = (s) => {
   if (s.netAlerts === false) { st.net = { online: true, vpn: '', proxy: false }; paintStatus(); }
   st.calendar = CALENDARS.includes(s.calendar) ? s.calendar : 'gregorian';
   st.face = s.face === 'clock' ? 'clock' : 'eyes';
+  st.dualMonitors = !!s.dualMonitors;
+  st.secondaryAlwaysOpen = s.secondaryAlwaysOpen !== false;
+  syncMonitorBtn();
   st.settings = s; st.lastUser = s.lastUser || '';
   st.gen.len = Number(s.vaultLength) || 18; st.gen.symbols = s.vaultSymbols !== false;
   if (st.stackOpen && st.stackKind === 'settings') { const y = stackList.scrollTop; renderStack(); stackList.scrollTop = y; }
@@ -2098,8 +2125,115 @@ window.qazi.onClip((c) => {
 window.qazi.onDownload((d) => {
   showNotif({ app: 'Download finished', title: d.name, body: d.size + (d.risky ? ' · click to show in folder' : ' · click to open'), icon: d.icon, action: 'download', path: d.path });
 });
+// ------------------------------------------------------------ multi-monitor switch, glanceable laptop mode & elastic drag
+function spawnDragSparks(vx, magnet) {
+  if (dragSparks.length > 26 || (Math.abs(vx) < 2 && magnet < 0.3)) return;
+  const W = island.clientWidth, cx = fx.width / 2, dir = vx >= 0 ? -1 : 1;
+  const n = Math.abs(vx) > 10 ? 2 : 1;
+  for (let i = 0; i < n; i++) {
+    dragSparks.push({
+      x: cx + dir * (W * 0.35 + Math.random() * 14),
+      y: 12 + Math.random() * 28,
+      vx: dir * (16 + Math.abs(vx) * 2.2) + (Math.random() - 0.5) * 18,
+      vy: (Math.random() - 0.5) * 24,
+      r: 0.9 + Math.random() * 1.1,
+      life: 0.75 + Math.random() * 0.25,
+      col: magnet > 0.35 ? getComputedStyle(document.documentElement).getPropertyValue('--c3').trim() || '#c08cff' : 'rgba(255,255,255,.9)',
+    });
+  }
+}
+function syncMonitorBtn() {
+  const bt = $('#t-monitor');
+  if (!bt) return;
+  bt.classList.toggle('hidden', st.monitorCount < 2);
+  bt.classList.toggle('active', st.dualMonitors);
+  bt.title = st.dualMonitors
+    ? 'Showing on both monitors — click for single (right-click toggles)'
+    : 'Move to other monitor (right-click: both monitors)';
+}
+function applyMonitorState(m) {
+  if (!m) return;
+  st.onSecondary = !m.isPrimary;
+  st.monitorCount = Number(m.monitorsCount) || 1;
+  st.dualMonitors = !!m.dualMonitors;
+  syncMonitorBtn();
+  render();
+}
+const monBtn = $('#t-monitor');
+if (monBtn) {
+  monBtn.addEventListener('click', (e) => { e.stopPropagation(); window.qazi.switchMonitor(); });
+  monBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); window.qazi.toggleDual(); });
+}
+window.qazi.onMonitorState(applyMonitorState);
+window.qazi.onDragFx((d) => {
+  if (!d) return;
+  if (d.active) {
+    st.pillDrag = true;
+    island.classList.add('grabbing'); island.classList.remove('snapping');
+    const sx = 1 + Math.min(0.13, Math.abs(d.vx || 0) * 0.0042);
+    const sy = 1 / Math.sqrt(sx) + clamp((d.pullY || 0) * 0.0022, 0, 0.08);
+    const rot = clamp((d.vx || 0) * 0.14, -3.5, 3.5);
+    island.style.transform = `translateX(-50%) scale(${sx.toFixed(3)}, ${sy.toFixed(3)}) rotate(${rot.toFixed(2)}deg)`;
+    const mag = d.magnet || 0;
+    dragGlowActive = true;
+    glow.classList.add('drag-glow');
+    glow.style.opacity = clamp(0.14 + mag * 0.34, 0, 0.48).toFixed(3);
+    glow.style.transform = `scale(${(1 + mag * 0.14).toFixed(3)}, ${(1 + mag * 0.35).toFixed(3)})`;
+    spawnDragSparks(d.vx || 0, mag);
+  } else {
+    st.pillDrag = false;
+    island.classList.remove('grabbing'); island.classList.add('snapping');
+    island.style.transform = '';
+    setTimeout(() => island.classList.remove('snapping'), 420);
+  }
+});
+window.qazi.onPillLanded((p) => {
+  st.pillDrag = false;
+  island.classList.remove('grabbing');
+  island.style.transform = '';
+  bump();
+  clearTimeout(dragGlowT);
+  dragGlowActive = true;
+  glow.classList.add('drag-glow');
+  glow.style.opacity = p && p.switched ? '0.42' : '0.24';
+  glow.style.transform = 'scale(1.12, 1.25)';
+  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 320);
+});
+
+let dragWatch = null;
+island.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || st.typing || st.stackOpen || st.scrubbing || st.dragOut) return;
+  if (e.target.closest('button, input, a, #seek, .hf, #t-date')) return;
+  const sx = e.clientX, sy = e.clientY;
+  const clean = () => {
+    window.removeEventListener('pointermove', onMove, true);
+    window.removeEventListener('pointerup', clean, true);
+    window.removeEventListener('pointercancel', clean, true);
+    dragWatch = null;
+  };
+  const onMove = (ev) => {
+    if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
+      clean();
+      suppressClickUntil = Date.now() + 300;
+      st.pillDrag = true;
+      window.qazi.pillDragStart();
+    }
+  };
+  if (dragWatch) dragWatch();
+  dragWatch = clean;
+  window.addEventListener('pointermove', onMove, true);
+  window.addEventListener('pointerup', clean, true);
+  window.addEventListener('pointercancel', clean, true);
+});
+document.addEventListener('click', (e) => {
+  if (Date.now() < suppressClickUntil && island.contains(e.target)) {
+    e.stopImmediatePropagation(); e.preventDefault();
+  }
+}, true);
+
 window.qazi.onSettings(applySettings);
 window.qazi.getSettings().then(applySettings);
+window.qazi.getMonitorState().then(applyMonitorState);
 paintVol(); tick(); updateBadge(); paintStatus(); render();
 window.__qazi = { st, timer, showNotif, onNotif, onMedia, render, setStack, showHud, setShelf, quickNote, parseReminder, guessSite, emote, ask, tick, smart, calc, jalaliToGregorian, levels, fake: (v) => { st.fakeLevels = v; } };   // debug hooks
 })();

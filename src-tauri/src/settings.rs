@@ -11,7 +11,7 @@ use crate::sys;
 
 static SETTINGS: Mutex<Option<Map<String, Value>>> = Mutex::new(None);
 const THEMES: [&str; 10] = ["black", "nebula", "crystal", "ember", "reactor", "venom", "cloud", "water", "lava", "ice"];
-const BOOLS: [&str; 15] = ["autoUpdate", "musicReact", "netAlerts", "sensorDot", "smartCopy", "autoHide", "hideVideo", "copyPreview", "clipHistory", "deviceAlerts", "downloadAlerts", "shelf", "visuals", "noteHotkey", "vaultSymbols"];
+const BOOLS: [&str; 17] = ["autoUpdate", "musicReact", "netAlerts", "sensorDot", "smartCopy", "autoHide", "hideVideo", "copyPreview", "clipHistory", "deviceAlerts", "downloadAlerts", "shelf", "visuals", "noteHotkey", "vaultSymbols", "dualMonitors", "secondaryAlwaysOpen"];
 const CALENDARS: [&str; 4] = ["gregorian", "shamsi", "shamsi-fa", "both"];
 
 fn defaults() -> Map<String, Value> {
@@ -25,6 +25,7 @@ fn defaults() -> Map<String, Value> {
         "skin": "black",            // the resting pill: plain black or one of the animated skins
         "musicTheme": "sky",        // what plays behind the track: "sky" (colours of the cover) or a skin
         "netAlerts": true, "sensorDot": true, "smartCopy": true, "musicReact": true, "autoUpdate": true,
+        "dualMonitors": false, "secondaryAlwaysOpen": true, "monitorName": "",
     })
     .as_object()
     .cloned()
@@ -111,10 +112,18 @@ pub fn apply(key: &str, value: &Value) {
             }
         }
         "dndHint" | "toured" => put(key, true.into()),
+        "monitorName" => {
+            if let Some(v) = value.as_str().filter(|v| v.len() <= 128) {
+                put(key, v.into());
+            }
+        }
         _ if BOOLS.contains(&key) => put(key, value.as_bool().unwrap_or(false).into()),
         _ => return,
     }
     crate::hit::HOTKEY_WANTED.store(flag("noteHotkey"), std::sync::atomic::Ordering::SeqCst);
+    if matches!(key, "dualMonitors" | "secondaryAlwaysOpen" | "monitorName") {
+        crate::hit::on_settings_changed();
+    }
     broadcast();
 }
 
