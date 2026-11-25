@@ -34,16 +34,20 @@ jobs:
           $version = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") { throw "tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version" }
           New-Item -ItemType Directory -Force dist | Out-Null
-          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress; }
-          & $nsis /V2 "/DVERSION=$version" installer/island.nsi
-          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
           Copy-Item src-tauri/target/release/peeky.exe dist/Peeky-Portable.exe
           New-Item -ItemType Directory -Force dist/zip | Out-Null
           Copy-Item src-tauri/target/release/peeky.exe dist/zip/Peeky.exe
           Copy-Item LICENSE, README.md dist/zip/
           Compress-Archive -Path dist/zip/* -DestinationPath dist/Peeky-Windows.zip
           Remove-Item -Recurse dist/zip
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis) -and $env:GITHUB_REF_TYPE -eq 'tag') { choco install nsis -y --no-progress }
+          if (Test-Path $nsis) {
+            & $nsis /V2 "/DVERSION=$version" installer/island.nsi
+            if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          } else {
+            Write-Host "Skipping NSIS installer (makensis not present)."
+          }
           @{ version = $version; published = (Get-Date).ToUniversalTime().ToString('o') } | ConvertTo-Json | Set-Content dist/latest.json -Encoding utf8NoBOM
           "VERSION=$version" >> $env:GITHUB_ENV
           Get-ChildItem dist | Format-Table Name, Length
