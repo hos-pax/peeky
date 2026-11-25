@@ -93,7 +93,7 @@ const st = {
   gen: { pass: '', len: 18, symbols: true },
   skin: 'black', musicTheme: 'sky',                // what the pill wears at rest / while music plays
   net: { online: true, vpn: '', proxy: false }, sensors: { mic: [], cam: [] },
-  smartCopy: true, hudAct: null, muteClipUntil: 0, react: true,
+  smartCopy: true, hudAct: null, muteClipUntil: 0, react: true, soundFx: true,
   onSecondary: false, monitorCount: 1, dualMonitors: false, secondaryAlwaysOpen: true, pillDrag: false,
 };
 // the window takes the mouse only while the cursor is on the island (or a text field is open)
@@ -162,9 +162,11 @@ function render() {
   }
   const v = pickView();
   if (v !== cur) {
+    const was = cur;
     views[cur].classList.remove('on');
     views[v].classList.add('on');
     cur = v;
+    if (v === 'tools' && was === 'idle' && st.hover && !st.pillDrag) sfx.tick();
   }
   const w = clamp(Math.ceil(views[cur].offsetWidth), 70, 600);
   if (island.dataset.w !== String(w)) {
@@ -1199,8 +1201,117 @@ function drawLook(t, dt, live) {
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 }
 const barsC = $('#bars'), barsG = barsC.getContext('2d');
+const fxTop = $('#fx-top'), fxTopG = fxTop.getContext('2d'), FX_W = 700, FX_H = 170;
+function sizeFxTop() {
+  const dpr = window.devicePixelRatio || 1;
+  fxTop.width = Math.round(FX_W * dpr); fxTop.height = Math.round(FX_H * dpr);
+  fxTopG.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+sizeFxTop(); window.addEventListener('resize', sizeFxTop);
+
+// Procedural Web Audio SFX engine (synthesized transients & harmonic swells, zero asset bloat)
+let actx = null, lastTickAt = 0, lastChargeSfxAt = 0;
+const ensureAudio = () => {
+  if (!st.soundFx) return null;
+  if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) actx = new AC(); }
+  if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  return actx;
+};
+const sfx = {
+  tick() {
+    const now = performance.now(); if (now - lastTickAt < 180) return; lastTickAt = now;
+    const c = ensureAudio(); if (!c) return;
+    try {
+      const t = c.currentTime, o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+      f.type = 'highpass'; f.frequency.setValueAtTime(220, t);
+      o.type = 'sine'; o.frequency.setValueAtTime(640, t); o.frequency.exponentialRampToValueAtTime(340, t + 0.024);
+      g.gain.setValueAtTime(0.001, t); g.gain.linearRampToValueAtTime(0.055, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.028);
+      o.connect(f); f.connect(g); g.connect(c.destination);
+      o.start(t); o.stop(t + 0.032);
+    } catch { /* audio blocked */ }
+  },
+  grab() {
+    const c = ensureAudio(); if (!c) return;
+    try {
+      const t = c.currentTime, o = c.createOscillator(), g = c.createGain();
+      o.type = 'triangle'; o.frequency.setValueAtTime(195, t); o.frequency.exponentialRampToValueAtTime(460, t + 0.042);
+      g.gain.setValueAtTime(0.001, t); g.gain.linearRampToValueAtTime(0.095, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.048);
+      o.connect(g); g.connect(c.destination);
+      o.start(t); o.stop(t + 0.052);
+    } catch {}
+  },
+  snap(impact = 0.6, switched = false) {
+    const c = ensureAudio(); if (!c) return;
+    try {
+      const t = c.currentTime, p = clamp(impact, 0.3, 1.2);
+      // 1) Crisp sub thump
+      const sub = c.createOscillator(), sg = c.createGain();
+      sub.type = 'sine'; sub.frequency.setValueAtTime(110 + p * 35, t); sub.frequency.exponentialRampToValueAtTime(38, t + 0.095);
+      sg.gain.setValueAtTime(0.001, t); sg.gain.linearRampToValueAtTime(0.11 * p, t + 0.004); sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+      sub.connect(sg); sg.connect(c.destination); sub.start(t); sub.stop(t + 0.12);
+      // 2) Airy crystal lock harmonic
+      const hi = c.createOscillator(), hg = c.createGain();
+      hi.type = 'sine';
+      hi.frequency.setValueAtTime(switched ? 587.3 : 493.9, t);
+      hi.frequency.exponentialRampToValueAtTime(switched ? 880 : 659.3, t + 0.06);
+      hg.gain.setValueAtTime(0.001, t); hg.gain.linearRampToValueAtTime(switched ? 0.075 : 0.048, t + 0.004); hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+      hi.connect(hg); hg.connect(c.destination); hi.start(t); hi.stop(t + 0.16);
+    } catch {}
+  },
+  charge() {
+    const now = performance.now(); if (now - lastChargeSfxAt < 700) return; lastChargeSfxAt = now;
+    const c = ensureAudio(); if (!c) return;
+    try {
+      const t = c.currentTime, o = c.createOscillator(), g = c.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(340, t); o.frequency.exponentialRampToValueAtTime(680, t + 0.12);
+      g.gain.setValueAtTime(0.001, t); g.gain.linearRampToValueAtTime(0.065, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + 0.15);
+    } catch {}
+  },
+  merge() {
+    const c = ensureAudio(); if (!c) return;
+    try {
+      const t = c.currentTime;
+      const sub = c.createOscillator(), sg = c.createGain();
+      sub.type = 'sine'; sub.frequency.setValueAtTime(140, t); sub.frequency.exponentialRampToValueAtTime(34, t + 0.18);
+      sg.gain.setValueAtTime(0.001, t); sg.gain.linearRampToValueAtTime(0.18, t + 0.006); sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.21);
+      sub.connect(sg); sg.connect(c.destination); sub.start(t); sub.stop(t + 0.22);
+      [523.25, 783.99, 1046.5, 1318.5].forEach((freq, idx) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = idx % 2 ? 'triangle' : 'sine';
+        const dt = idx * 0.022;
+        o.frequency.setValueAtTime(freq * 0.92, t + dt); o.frequency.exponentialRampToValueAtTime(freq, t + dt + 0.05);
+        g.gain.setValueAtTime(0.0001, t + dt); g.gain.linearRampToValueAtTime(0.058 / (1 + idx * 0.3), t + dt + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.34);
+        o.connect(g); g.connect(c.destination); o.start(t + dt); o.stop(t + dt + 0.36);
+      });
+    } catch {}
+  },
+  sparkle() {
+    const c = ensureAudio(); if (!c) return;
+    try {
+      const t = c.currentTime;
+      [987.8, 1318.5].forEach((f0, idx) => {
+        const o = c.createOscillator(), g = c.createGain(), st0 = t + idx * 0.045;
+        o.type = 'sine'; o.frequency.setValueAtTime(f0, st0);
+        g.gain.setValueAtTime(0.0001, st0); g.gain.linearRampToValueAtTime(0.028, st0 + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, st0 + 0.11);
+        o.connect(g); g.connect(c.destination); o.start(st0); o.stop(st0 + 0.12);
+      });
+    } catch {}
+  },
+};
+
 const dragSparks = [], dragStreaks = [], edgeSweeps = [];
-let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0, mergePullActive = false, lastFxCleared = false;
+let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0, mergePullActive = false, lastTopCleared = false;
+let liveDragMag = 0, liveDragHot = false, liveDragCharge = 0, liveAbsorbing = false, liveAbsorbP = 0, prevMergeHot = false;
+let gleamT = 0;
+function pillGleam(mega = false) {
+  const cls = mega ? 'gleaming-mega' : 'gleaming';
+  island.classList.remove('gleaming', 'gleaming-mega'); void island.offsetWidth;
+  island.classList.add(cls);
+  clearTimeout(gleamT);
+  gleamT = setTimeout(() => island.classList.remove('gleaming', 'gleaming-mega'), 760);
+}
 function accentCols() {
   const cs = getComputedStyle(document.documentElement);
   return {
@@ -1212,101 +1323,138 @@ function accentCols() {
 function spawnEdgeSweep(power = 0.85, isMerge = false) {
   const { c2, c3 } = accentCols();
   edgeSweeps.push({
-    cx: fx.width / 2,
-    r: Math.max(24, island.clientWidth * 0.35),
-    maxR: isMerge ? 345 : 220 + power * 115,
-    speed: isMerge ? 1480 : 1080 + power * 360,
+    cx: FX_W / 2,
+    r: Math.max(26, island.clientWidth * 0.36),
+    maxR: isMerge ? 348 : 230 + power * 115,
+    speed: isMerge ? 1950 : 1450 + power * 420,
     life: 1,
-    fade: isMerge ? 2.6 : 3.2,
+    fade: isMerge ? 2.5 : 3.2,
     col1: isMerge ? '#7dd3fc' : c3,
-    col2: c2,
+    col2: isMerge ? '#c08cff' : c2,
     isMerge,
   });
 }
-function drawDragFX(dt, preserveCanvas) {
-  const f = fxG;
-  if (!preserveCanvas) f.clearRect(0, 0, fx.width, fx.height);
-  // 1) Fast neon bezel light sweep along the top edge of the monitor
+function drawTopFx(t, dt) {
+  const f = fxTopG;
+  f.clearRect(0, 0, FX_W, FX_H);
+  if (st.tucked && !mergePullActive) return;
+  f.save();
+  f.globalCompositeOperation = 'lighter';
+  const cx = FX_W / 2, pw = island.clientWidth || 84;
+
+  // 1) Perimeter Plasma Edge Runner when dragging, flying, or pulling toward merge
+  const ringAmp = liveAbsorbing ? 1 : mergePullActive ? clamp(0.45 + liveDragCharge * 0.55, 0.3, 1) : st.pillDrag ? clamp(0.32 + liveDragMag * 0.68, 0.25, 1) : 0;
+  if (ringAmp > 0.05) {
+    const { c2, c3 } = accentCols();
+    const sc = liveAbsorbing ? clamp(1 - liveAbsorbP * 0.72, 0.22, 1) : 1;
+    const rw = (pw + 3) * sc, rh = 38 * sc;
+    const rx = cx - rw / 2, ry = 8 + (36 - 36 * sc) / 2 - 1;
+    const colA = (liveDragHot || mergePullActive || liveAbsorbing) ? '#7dd3fc' : c3;
+    const colB = c2;
+    const perim = 2 * Math.max(0, rw - rh) + Math.PI * rh;
+    f.save();
+    f.globalAlpha = ringAmp * 0.78;
+    f.strokeStyle = colA;
+    f.shadowColor = colB;
+    f.shadowBlur = 12;
+    f.lineWidth = liveDragHot || liveAbsorbing ? 2.3 : 1.7;
+    f.setLineDash([Math.max(36, perim * 0.28), perim]);
+    f.lineDashOffset = -(t * (liveDragHot ? 0.42 : 0.24)) % (perim * 1.28);
+    f.beginPath(); f.roundRect(rx, ry, rw, rh, 19 * sc); f.stroke();
+    f.lineDashOffset = -((t * (liveDragHot ? 0.42 : 0.24) + perim * 0.64) % (perim * 1.28));
+    f.strokeStyle = '#ffffff'; f.globalAlpha = ringAmp * 0.48; f.lineWidth = 1.1;
+    f.beginPath(); f.roundRect(rx, ry, rw, rh, 19 * sc); f.stroke();
+    f.restore();
+  }
+
+  // 2) Blazing top-bezel horizontal laser beams + dual expanding shockwaves
   for (let i = edgeSweeps.length - 1; i >= 0; i--) {
     const wv = edgeSweeps[i];
     wv.r += wv.speed * dt;
     wv.life -= dt * wv.fade;
     if (wv.life <= 0 || wv.r > wv.maxR) { edgeSweeps.splice(i, 1); continue; }
     const a = clamp(wv.life, 0, 1);
-    const len = Math.min(95, wv.r * 0.45);
+    const len = Math.min(130, wv.r * 0.52);
     const yBeam = 8.5;
     for (const dir of [-1, 1]) {
       const tip = wv.cx + dir * wv.r;
       const tail = wv.cx + dir * Math.max(0, wv.r - len);
       const grad = f.createLinearGradient(tail, yBeam, tip, yBeam);
       grad.addColorStop(0, 'rgba(255,255,255,0)');
-      grad.addColorStop(0.6, wv.col1);
+      grad.addColorStop(0.45, wv.col2);
+      grad.addColorStop(0.82, wv.col1);
       grad.addColorStop(1, '#ffffff');
       f.save();
-      f.globalAlpha = a * (wv.isMerge ? 0.95 : 0.78);
+      f.globalAlpha = a * (wv.isMerge ? 1 : 0.85);
       f.strokeStyle = grad;
       f.shadowColor = wv.col1;
-      f.shadowBlur = wv.isMerge ? 12 : 8;
-      f.lineWidth = wv.isMerge ? 2.4 : 1.9;
+      f.shadowBlur = wv.isMerge ? 18 : 12;
+      f.lineWidth = wv.isMerge ? 3.2 : 2.3;
       f.lineCap = 'round';
       f.beginPath(); f.moveTo(tail, yBeam); f.lineTo(tip, yBeam); f.stroke();
       f.restore();
     }
-    // Luminous pulse halo tightly wrapping the pill on arrival
-    if (wv.life > 0.45) {
-      const ha = clamp((wv.life - 0.45) / 0.55, 0, 1);
-      const pw = island.clientWidth + (1 - ha) * 44;
-      f.save();
-      f.globalAlpha = ha * (wv.isMerge ? 0.52 : 0.32);
-      f.strokeStyle = wv.col1;
-      f.shadowColor = wv.col2;
-      f.shadowBlur = 14;
-      f.lineWidth = 1.6;
-      f.beginPath();
-      f.roundRect(wv.cx - pw / 2, 7.5 - (1 - ha) * 1.5, pw, 37 + (1 - ha) * 3, 20);
-      f.stroke();
-      f.restore();
-    }
+    // Dual expanding shockwave rings radiating around capsule
+    const prog = 1 - a;
+    const expandW = pw + prog * (wv.isMerge ? 135 : 85);
+    const expandH = 36 + prog * (wv.isMerge ? 56 : 34);
+    f.save();
+    f.globalAlpha = a * (wv.isMerge ? 0.72 : 0.48);
+    f.strokeStyle = wv.col1;
+    f.shadowColor = wv.col2;
+    f.shadowBlur = wv.isMerge ? 20 : 12;
+    f.lineWidth = wv.isMerge ? 2.4 : 1.7;
+    f.beginPath();
+    f.roundRect(wv.cx - expandW / 2, 8 - prog * (wv.isMerge ? 12 : 7), expandW, expandH, Math.min(34, expandH / 2));
+    f.stroke();
+    f.restore();
   }
-  // 2) Velocity comet streaks trailing the capsule
+
+  // 3) Velocity comet light ribbons
   for (let i = dragStreaks.length - 1; i >= 0; i--) {
     const s = dragStreaks[i];
-    s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt * 3.4;
+    s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt * 3.1;
     if (s.life <= 0) { dragStreaks.splice(i, 1); continue; }
     const norm = Math.hypot(s.vx, s.vy) || 1;
     const tx = s.x - (s.vx / norm) * s.len * clamp(s.life, 0.2, 1);
     const ty = s.y - (s.vy / norm) * s.len * clamp(s.life, 0.2, 1);
     const g = f.createLinearGradient(tx, ty, s.x, s.y);
     g.addColorStop(0, 'rgba(255,255,255,0)');
-    g.addColorStop(1, s.col);
+    g.addColorStop(0.7, s.col);
+    g.addColorStop(1, '#ffffff');
     f.save();
-    f.globalAlpha = clamp(s.life, 0, 1) * 0.72;
+    f.globalAlpha = clamp(s.life, 0, 1) * 0.88;
     f.strokeStyle = g;
+    f.shadowColor = s.col;
+    f.shadowBlur = 9;
     f.lineWidth = s.w;
     f.lineCap = 'round';
     f.beginPath(); f.moveTo(tx, ty); f.lineTo(s.x, s.y); f.stroke();
     f.restore();
   }
-  // 3) Glowing star sparks & absorption motes
+
+  // 4) Bright star sparks & vortex motes
   for (let i = dragSparks.length - 1; i >= 0; i--) {
     const s = dragSparks[i];
-    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 42 * dt; s.life -= dt * (s.fade || 2.3);
+    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += (s.g ?? 34) * dt; s.life -= dt * (s.fade || 2.1);
     if (s.life <= 0) { dragSparks.splice(i, 1); continue; }
     f.save();
-    f.globalAlpha = clamp(s.life, 0, 1) * 0.85;
+    f.globalAlpha = clamp(s.life, 0, 1) * 0.92;
     f.fillStyle = s.col;
     f.shadowColor = s.col;
-    f.shadowBlur = 5;
-    f.beginPath(); f.arc(s.x, s.y, s.r * clamp(s.life + 0.3, 0.4, 1.2), 0, 6.283); f.fill();
+    f.shadowBlur = 8;
+    const rr = s.r * clamp(s.life + 0.35, 0.4, 1.25);
+    if (s.star) sparkle(f, s.x, s.y, rr * 2.2);
+    else { f.beginPath(); f.arc(s.x, s.y, rr, 0, 6.283); f.fill(); }
     f.restore();
   }
-  f.globalAlpha = 1;
+  f.restore();
 }
 let idleFrames = 0, lastT = 0, lastPaint = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const playing = st.media.playing && musicOn();
-  const hasDragFx = !!(dragSparks.length || dragStreaks.length || edgeSweeps.length);
+  const hasTopFx = !!(dragSparks.length || dragStreaks.length || edgeSweeps.length || st.pillDrag || mergePullActive);
   const look = st.skin !== 'black' ? st.skin : playing && st.visuals && st.react ? 'sky' : null;
   if (look !== lookNow) {
     if (look && lookNow) skyA = Math.min(skyA, 0.2);
@@ -1316,16 +1464,16 @@ function frame(t) {
   skyA += ((look ? 1 : 0) - skyA) * 0.07;
   island.classList.toggle('sky', skyA > 0.4);
   paintSeek();
-  if (!playing && energy < 0.004 && !st.pillDrag && !mergePullActive && !hasDragFx) {
+  if (!playing && energy < 0.004 && !hasTopFx) {
     if (skyA < 0.01) {
-      if (idleFrames++ === 2) { drawAura(t, 0, false); if (!lastFxCleared) { fxG.clearRect(0, 0, fx.width, fx.height); lastFxCleared = true; } glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
+      if (idleFrames++ === 2) { drawAura(t, 0, false); if (!lastTopCleared) { fxTopG.clearRect(0, 0, FX_W, FX_H); lastTopCleared = true; } glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
       lastT = t;
       return;
     }
     if (st.tucked) { drawAura(t, 0, false); return; }
     if (t - lastPaint < (aura ? 28 : 50)) return;
   }
-  idleFrames = 0; lastFxCleared = false;
+  idleFrames = 0; lastTopCleared = false;
   const dt = Math.min(0.05, (t - lastT) / 1000); lastT = t; lastPaint = t;
   sampleLevels(t, playing);
 
@@ -1345,8 +1493,8 @@ function frame(t) {
     drawLook(t, dt, false); drawAura(t, dt, false);
     levels.set(keep); bass = b; bassSlow = bs; energy = e;
   }
-  if (hasDragFx) drawDragFX(dt, !!aura);
-  else if (!aura && !lastFxCleared) { fxG.clearRect(0, 0, fx.width, fx.height); lastFxCleared = true; }
+  if (hasTopFx) drawTopFx(t, dt);
+  else if (!lastTopCleared) { fxTopG.clearRect(0, 0, FX_W, FX_H); lastTopCleared = true; }
 
   if (cur === 'media') {
     const w = barsC.width, h = barsC.height, n = 5, bw = 6, gap = 5, x0 = (w - (n * bw + (n - 1) * gap)) / 2;
@@ -1974,6 +2122,7 @@ const SETTINGS_UI = [
   ['toggle', 'hideVideo', 'Stay out of the way for videos'],
   ['toggle', 'dualMonitors', 'Show on both monitors'],
   ['toggle', 'secondaryAlwaysOpen', 'Keep open on 2nd monitor'],
+  ['toggle', 'soundFx', 'Sound effects'],
   ['swatch', 'skin', 'Theme', ['black', 'nebula', 'crystal', 'ember', 'reactor', 'venom']],        // cloud, water, lava and ice are parked until they are finished
   ['toggle', 'musicReact', 'Theme reacts to music'],
   ['toggle', 'visuals', 'Night sky with music (black theme)'],
@@ -2095,26 +2244,56 @@ window.qazi.onOpen((what) => {
 });
 window.qazi.onHotkey((what) => { if (what === 'note' && !st.typing) { st.holdUntil = Date.now() + 1500; quickNote(); } });
 
-// ------------------------------------------------------------ the face
+// ------------------------------------------------------------ the face & living idle island behaviors
 const face = $('#i-face');
-let emoteT = 0;
+let emoteT = 0, hopT = 0;
 function emote(name, ms) {
   face.className = name; clearTimeout(emoteT);
   emoteT = setTimeout(() => { face.className = ''; }, ms);
 }
-const blink = () => emote('blink', 130);
-(function faceLoop() {
-  if (cur === 'idle' && !st.tucked && st.face === 'eyes' && !face.className) {
-    const r = Math.random(), night = new Date().getHours() < 6;
-    if (night && r < 0.45) emote('sleepy', 2800);
-    else if (r < 0.6) blink();
-    else if (r < 0.72) { blink(); setTimeout(blink, 250); }
-    else if (r < 0.84) { emote('look-l', 650); setTimeout(() => emote('look-r', 650), 700); }
-    else if (r < 0.91) emote('happy', 1300);
-    else if (r < 0.96) emote('wink', 380);
-    else emote('squint', 900);
+function pillHop() {
+  if (st.pillDrag || mergePullActive || st.tucked) return;
+  island.classList.remove('hop'); void island.offsetWidth; island.classList.add('hop');
+  clearTimeout(hopT);
+  hopT = setTimeout(() => island.classList.remove('hop'), 520);
+}
+function spawnIdleGlitter(count = 4) {
+  const { c3 } = accentCols();
+  for (let i = 0; i < count; i++) {
+    dragSparks.push({
+      x: FX_W / 2 + (Math.random() - 0.5) * 64,
+      y: 12 + Math.random() * 20,
+      vx: (Math.random() - 0.5) * 38,
+      vy: -12 - Math.random() * 22,
+      g: 18,
+      r: 0.9 + Math.random() * 0.9,
+      life: 0.85,
+      fade: 1.5,
+      star: true,
+      col: i % 2 ? '#ffffff' : c3,
+    });
   }
-  setTimeout(faceLoop, 1700 + Math.random() * 3600);
+}
+const blink = () => emote('blink', 120);
+(function faceLoop() {
+  if (cur === 'idle' && !st.tucked && st.face === 'eyes' && !face.className && !st.pillDrag && !mergePullActive) {
+    const r = Math.random(), night = new Date().getHours() < 6;
+    if (night && r < 0.42) emote('sleepy', 2900);
+    else if (r < 0.36) blink();
+    else if (r < 0.48) { blink(); setTimeout(() => { blink(); pillHop(); }, 230); }
+    else if (r < 0.60) { emote('curious', 1500); }
+    else if (r < 0.71) { emote('radar', 1350); face.style.setProperty('--lx', '-2.8px'); setTimeout(() => { if (face.className === 'radar') face.style.setProperty('--lx', '2.8px'); }, 450); pillGleam(false); }
+    else if (r < 0.82) { emote('happy', 1100); pillHop(); spawnIdleGlitter(5); if (Math.random() < 0.35) sfx.sparkle(); }
+    else if (r < 0.90) { emote('side-eye', 1200); setTimeout(() => emote('wink', 280), 900); }
+    else if (r < 0.96) { emote('look-l', 500); setTimeout(() => emote('look-r', 500), 540); }
+    else { emote('shock', 450); setTimeout(blink, 480); }
+  }
+  setTimeout(faceLoop, 1500 + Math.random() * 3000);
+})();
+// Periodic subtle glass gleam across the smoked surface while idle
+(function idleVibeLoop() {
+  if (!st.tucked && !st.pillDrag && !mergePullActive && Math.random() < 0.72) pillGleam(false);
+  setTimeout(idleVibeLoop, 11000 + Math.random() * 9000);
 })();
 // the eyes follow the cursor a little when it comes near
 window.qazi.onCursor(({ x, y }) => {
@@ -2139,6 +2318,7 @@ const applySettings = (s) => {
   st.musicTheme = THEMES[s.musicTheme] ? s.musicTheme : 'sky';
   st.smartCopy = s.smartCopy !== false;
   st.react = s.musicReact !== false;
+  st.soundFx = s.soundFx !== false;
   if (s.netAlerts === false) { st.net = { online: true, vpn: '', proxy: false }; paintStatus(); }
   st.calendar = CALENDARS.includes(s.calendar) ? s.calendar : 'gregorian';
   st.face = s.face === 'clock' ? 'clock' : 'eyes';
@@ -2277,50 +2457,52 @@ window.qazi.onDownload((d) => {
 function spawnDragSparks(vx, vy, magnet, hot) {
   const spd = Math.hypot(vx, vy);
   const { c3 } = accentCols();
-  const col = hot ? '#7dd3fc' : magnet > 0.35 ? c3 : 'rgba(255,255,255,.92)';
-  if (spd > 5 && dragStreaks.length < 22) {
-    const W = island.clientWidth, cx = fx.width / 2, nx = -vx / spd, ny = -vy / spd;
+  const col = hot ? '#7dd3fc' : magnet > 0.35 ? c3 : 'rgba(255,255,255,.94)';
+  if (spd > 3.5 && dragStreaks.length < 28) {
+    const W = island.clientWidth, cx = FX_W / 2, nx = -vx / spd, ny = -vy / spd;
     dragStreaks.push({
-      x: cx + nx * (W * 0.25 + Math.random() * 14) + (Math.random() - 0.5) * 16,
+      x: cx + nx * (W * 0.24 + Math.random() * 16) + (Math.random() - 0.5) * 18,
       y: 26 + ny * 8 + (Math.random() - 0.5) * 20,
-      vx: nx * (60 + spd * 3.6),
-      vy: ny * (60 + spd * 3.6),
-      len: clamp(10 + spd * 1.15, 10, 44),
-      w: hot ? 1.8 : 1.35,
-      life: 0.9,
+      vx: nx * (85 + spd * 4.4),
+      vy: ny * (85 + spd * 4.4),
+      len: clamp(14 + spd * 1.45, 14, 62),
+      w: hot ? 2.2 : 1.55,
+      life: 0.95,
       col,
     });
   }
-  if (dragSparks.length > 36 || (spd < 2.5 && magnet < 0.28 && !hot)) return;
-  const W = island.clientWidth, cx = fx.width / 2, dir = vx >= 0 ? -1 : 1;
-  const n = spd > 12 || hot ? 2 : 1;
+  if (dragSparks.length > 44 || (spd < 2 && magnet < 0.25 && !hot)) return;
+  const W = island.clientWidth, cx = FX_W / 2, dir = vx >= 0 ? -1 : 1;
+  const n = spd > 10 || hot ? 2 : 1;
   for (let i = 0; i < n; i++) {
     dragSparks.push({
-      x: cx + dir * (W * 0.32 + Math.random() * 14),
+      x: cx + dir * (W * 0.30 + Math.random() * 14),
       y: 12 + Math.random() * 28,
-      vx: dir * (20 + Math.abs(vx) * 2.4) + (Math.random() - 0.5) * 24,
-      vy: -vy * 1.1 + (Math.random() - 0.5) * 26,
-      r: 0.9 + Math.random() * 1.3,
-      life: 0.78 + Math.random() * 0.24,
-      fade: 2.2,
+      vx: dir * (26 + Math.abs(vx) * 2.6) + (Math.random() - 0.5) * 26,
+      vy: -vy * 1.2 + (Math.random() - 0.5) * 28,
+      r: 1.0 + Math.random() * 1.35,
+      life: 0.85 + Math.random() * 0.25,
+      fade: 2.1,
+      star: Math.random() < (hot ? 0.45 : 0.2),
       col,
     });
   }
 }
 function spawnRadialBurst(count, isMerge) {
   const { c2, c3 } = accentCols();
-  const cx = fx.width / 2;
+  const cx = FX_W / 2;
   for (let i = 0; i < count; i++) {
     const ang = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.35;
-    const spd = (isMerge ? 115 : 75) + Math.random() * (isMerge ? 140 : 85);
+    const spd = (isMerge ? 145 : 95) + Math.random() * (isMerge ? 175 : 100);
     dragSparks.push({
       x: cx + Math.cos(ang) * 18,
       y: 25 + Math.sin(ang) * 9,
       vx: Math.cos(ang) * spd,
-      vy: Math.sin(ang) * spd * 0.52 + 12,
-      r: (isMerge ? 1.3 : 1.0) + Math.random() * 1.2,
-      life: 0.9 + Math.random() * 0.25,
-      fade: isMerge ? 1.85 : 2.3,
+      vy: Math.sin(ang) * spd * 0.55 + 10,
+      r: (isMerge ? 1.4 : 1.05) + Math.random() * 1.25,
+      life: 0.95 + Math.random() * 0.25,
+      fade: isMerge ? 1.7 : 2.1,
+      star: i % 3 === 0,
       col: isMerge ? (i % 2 ? '#7dd3fc' : c3) : (i % 2 ? '#ffffff' : c2),
     });
   }
@@ -2344,8 +2526,8 @@ function applyMonitorState(m) {
 }
 const monBtn = $('#t-monitor');
 if (monBtn) {
-  monBtn.addEventListener('click', (e) => { e.stopPropagation(); window.qazi.switchMonitor(); });
-  monBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); window.qazi.toggleDual(); });
+  monBtn.addEventListener('click', (e) => { e.stopPropagation(); sfx.tick(); window.qazi.switchMonitor(); });
+  monBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); sfx.tick(); window.qazi.toggleDual(); });
 }
 window.qazi.onMonitorState(applyMonitorState);
 window.qazi.onDragFx((d) => {
@@ -2353,93 +2535,106 @@ window.qazi.onDragFx((d) => {
   if (d.active) {
     st.pillDrag = true;
     const vx = d.vx || 0, vy = d.vy || 0, spd = Math.hypot(vx, vy);
+    const mag = Math.max(d.magnet || 0, d.merge || 0);
+    liveDragMag = mag; liveDragHot = !!d.mergeHot; liveAbsorbing = !!d.absorbing; liveAbsorbP = d.absorbProgress || 0;
+    if (d.mergeHot && !prevMergeHot) sfx.charge();
+    prevMergeHot = !!d.mergeHot;
     if (d.absorbing) {
-      const p = clamp(d.absorbProgress || 0, 0, 1);
+      const p = clamp(liveAbsorbP, 0, 1);
       island.classList.add('absorbing'); island.classList.remove('grabbing', 'snapping');
-      const sc = clamp(1 - p * 0.72, 0.22, 1);
+      const sc = clamp(1 - p * 0.74, 0.2, 1);
       island.style.transform = `translateX(-50%) scale(${sc.toFixed(3)})`;
-      island.style.opacity = clamp(1 - p * 0.86, 0.08, 1).toFixed(3);
+      island.style.opacity = clamp(1 - p * 0.88, 0.06, 1).toFixed(3);
       glow.classList.add('drag-glow');
-      glow.style.opacity = clamp(0.4 + p * 0.45, 0, 0.85).toFixed(3);
-      glow.style.transform = `scale(${(1.1 + p * 0.3).toFixed(3)})`;
+      glow.style.opacity = clamp(0.45 + p * 0.5, 0, 0.92).toFixed(3);
+      glow.style.transform = `scale(${(1.15 + p * 0.35).toFixed(3)})`;
       spawnDragSparks(vx, vy, 1, true);
       return;
     }
-    island.classList.add('grabbing'); island.classList.remove('snapping', 'absorbing');
+    island.classList.toggle('grabbing', !d.flying); island.classList.toggle('snapping', !!d.flying); island.classList.remove('absorbing');
     island.style.opacity = '';
-    const sx = 1 + Math.min(0.14, Math.abs(vx) * 0.0044);
-    const sy = 1 / Math.sqrt(sx) + clamp((d.pullY || 0) * 0.00055, 0, 0.09);
-    const rot = clamp(vx * 0.14, -4.2, 4.2);
+    const sx = 1 + Math.min(0.16, Math.abs(vx) * 0.0046);
+    const sy = 1 / Math.sqrt(sx) + clamp((d.pullY || 0) * 0.0005, 0, 0.08);
+    const rot = clamp(vx * 0.14, -4.5, 4.5);
     island.style.transform = `translateX(-50%) scale(${sx.toFixed(3)}, ${sy.toFixed(3)}) rotate(${rot.toFixed(2)}deg)`;
-    const mag = Math.max(d.magnet || 0, d.merge || 0);
     dragGlowActive = true;
     glow.classList.add('drag-glow');
-    glow.style.opacity = clamp(0.16 + mag * 0.44 + Math.min(0.18, spd * 0.006), 0, 0.65).toFixed(3);
-    glow.style.transform = `scale(${(1 + mag * 0.18).toFixed(3)}, ${(1 + mag * 0.38).toFixed(3)})`;
+    glow.style.opacity = clamp(0.18 + mag * 0.48 + Math.min(0.24, spd * 0.008), 0, 0.74).toFixed(3);
+    glow.style.transform = `scale(${(1 + mag * 0.22).toFixed(3)}, ${(1 + mag * 0.44).toFixed(3)})`;
     if (cur === 'idle' && st.face === 'eyes') {
       face.style.setProperty('--lx', clamp(vx * 0.14, -3.6, 3.6).toFixed(2) + 'px');
       face.style.setProperty('--ly', clamp(vy * 0.12, -2.4, 2.4).toFixed(2) + 'px');
-      face.classList.toggle('wind', spd > 14);
-      face.classList.toggle('merge-watch', !!d.mergeHot && spd <= 14);
+      face.classList.toggle('wind', spd > 13);
+      face.classList.toggle('merge-watch', !!d.mergeHot && spd <= 13);
     }
     spawnDragSparks(vx, vy, mag, !!d.mergeHot);
   } else {
-    st.pillDrag = false;
+    st.pillDrag = false; liveDragMag = 0; liveDragHot = false; liveAbsorbing = false; prevMergeHot = false;
+    suppressClickUntil = Date.now() + 360;
     island.style.opacity = '';
     island.classList.remove('grabbing', 'absorbing'); island.classList.add('snapping');
     island.style.transform = '';
     face.classList.remove('wind', 'merge-watch');
-    setTimeout(() => island.classList.remove('snapping'), 480);
+    setTimeout(() => island.classList.remove('snapping'), 420);
   }
 });
 window.qazi.onPillLanded((p) => {
-  st.pillDrag = false;
+  st.pillDrag = false; liveDragMag = 0; liveDragHot = false; liveAbsorbing = false; prevMergeHot = false;
+  suppressClickUntil = Date.now() + 360;
   island.style.opacity = '';
   island.classList.remove('grabbing', 'absorbing', 'snapping');
   island.style.transform = '';
   face.classList.remove('wind', 'merge-watch');
-  bump();
-  const imp = clamp(Number(p && p.impact) || 0.5, 0.25, 1);
-  if ((p && p.switched) || imp >= 0.3) spawnEdgeSweep(imp, false);
-  spawnRadialBurst((p && p.switched) ? 14 : Math.round(6 + imp * 8), false);
-  if ((p && p.switched) || imp > 0.62) emote('happy', 680);
+  bump(); pillGleam(false);
+  const imp = clamp(Number(p && p.impact) || 0.55, 0.3, 1.15);
+  sfx.snap(imp, !!(p && p.switched));
+  spawnEdgeSweep(imp, false);
+  spawnRadialBurst((p && p.switched) ? 18 : Math.round(9 + imp * 8), false);
+  if ((p && p.switched) || imp > 0.55) emote('happy', 700);
   clearTimeout(dragGlowT);
   dragGlowActive = true;
   glow.classList.add('drag-glow');
-  glow.style.opacity = clamp((p && p.switched ? 0.52 : 0.3) + imp * 0.16, 0, 0.68).toFixed(3);
-  glow.style.transform = `scale(${(1.12 + imp * 0.12).toFixed(3)}, ${(1.25 + imp * 0.16).toFixed(3)})`;
-  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 360);
+  glow.style.opacity = clamp((p && p.switched ? 0.58 : 0.36) + imp * 0.18, 0, 0.78).toFixed(3);
+  glow.style.transform = `scale(${(1.16 + imp * 0.14).toFixed(3)}, ${(1.3 + imp * 0.18).toFixed(3)})`;
+  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 380);
 });
 window.qazi.onMergePull((p) => {
   if (p && p.active) {
     mergePullActive = true;
-    const ch = clamp(p.charge || 0, 0, 1), dir = clamp(p.dir || 0, -1, 1);
+    liveDragCharge = clamp(p.charge || 0, 0, 1);
+    st.revealUntil = Math.max(st.revealUntil, Date.now() + 2600);
+    updateTuck(); render();
+    if (p.hot && !prevMergeHot) sfx.charge();
+    prevMergeHot = !!p.hot;
+    const ch = liveDragCharge, dir = clamp(p.dir || 0, -1, 1);
     island.classList.add('merge-pull');
-    const lx = (dir * (3 + ch * 11)).toFixed(1), sc = (1 + ch * 0.055).toFixed(3);
+    const lx = (dir * (4 + ch * 12)).toFixed(1), sc = (1 + ch * 0.065).toFixed(3);
     island.style.transform = `translateX(calc(-50% + ${lx}px)) scale(${sc})`;
     dragGlowActive = true;
     glow.classList.add('drag-glow');
-    glow.style.opacity = clamp(0.26 + ch * 0.44, 0, 0.72).toFixed(3);
-    glow.style.transform = `translateX(${(dir * 8).toFixed(1)}px) scale(${(1.12 + ch * 0.18).toFixed(3)}, ${(1.28 + ch * 0.25).toFixed(3)})`;
+    glow.style.opacity = clamp(0.32 + ch * 0.48, 0, 0.80).toFixed(3);
+    glow.style.transform = `translateX(${(dir * 9).toFixed(1)}px) scale(${(1.16 + ch * 0.22).toFixed(3)}, ${(1.32 + ch * 0.28).toFixed(3)})`;
     if (cur === 'idle' && st.face === 'eyes') {
       face.classList.add('merge-watch');
-      face.style.setProperty('--lx', (dir * 3.2).toFixed(2) + 'px');
+      face.style.setProperty('--lx', (dir * 3.4).toFixed(2) + 'px');
       face.style.setProperty('--ly', '-0.6px');
     }
-    if (p.hot && dragSparks.length < 24 && Math.random() < 0.38) {
+    if (dragSparks.length < 34 && Math.random() < (p.hot ? 0.55 : 0.24)) {
       dragSparks.push({
-        x: fx.width / 2 + dir * (island.clientWidth * 0.45 + 32),
-        y: 24 + (Math.random() - 0.5) * 18,
-        vx: -dir * (48 + Math.random() * 44),
-        vy: (Math.random() - 0.5) * 12,
-        r: 1.2 + Math.random() * 1.1,
-        life: 0.7,
-        fade: 2.6,
-        col: '#7dd3fc',
+        x: FX_W / 2 + dir * (island.clientWidth * 0.48 + 42),
+        y: 25 + (Math.random() - 0.5) * 20,
+        vx: -dir * (65 + Math.random() * 55),
+        vy: (Math.random() - 0.5) * 14,
+        g: 0,
+        r: 1.3 + Math.random() * 1.1,
+        life: 0.72,
+        fade: 2.5,
+        star: Math.random() < 0.35,
+        col: p.hot ? '#7dd3fc' : '#c08cff',
       });
     }
   } else {
-    mergePullActive = false;
+    mergePullActive = false; liveDragCharge = 0; prevMergeHot = false;
     island.classList.remove('merge-pull');
     island.style.transform = '';
     face.classList.remove('merge-watch');
@@ -2451,30 +2646,33 @@ window.qazi.onMergePull((p) => {
   }
 });
 window.qazi.onMergeComplete((p) => {
-  mergePullActive = false;
-  st.pillDrag = false;
+  mergePullActive = false; st.pillDrag = false; liveDragMag = 0; liveDragHot = false; liveAbsorbing = false; liveDragCharge = 0; prevMergeHot = false;
+  st.revealUntil = Math.max(st.revealUntil, Date.now() + 2800);
+  updateTuck(); render();
   island.classList.remove('merge-pull', 'grabbing', 'absorbing');
+  island.style.opacity = '';
   island.style.transform = '';
   face.classList.remove('merge-watch', 'wind');
   island.classList.remove('merge-burst'); void island.offsetWidth; island.classList.add('merge-burst');
-  setTimeout(() => island.classList.remove('merge-burst'), 580);
-  bump();
-  const imp = clamp(Number(p && p.impact) || 0.85, 0.5, 1.2);
+  setTimeout(() => island.classList.remove('merge-burst'), 560);
+  bump(); pillGleam(true);
+  const imp = clamp(Number(p && p.impact) || 0.9, 0.55, 1.25);
+  sfx.merge();
   spawnEdgeSweep(imp, true);
-  spawnRadialBurst(22, true);
-  emote('happy', 950);
+  spawnRadialBurst(28, true);
+  emote('happy', 1050);
   clearTimeout(dragGlowT);
   dragGlowActive = true;
   glow.classList.add('drag-glow');
-  glow.style.opacity = '0.72';
-  glow.style.transform = 'scale(1.36, 1.52)';
-  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 460);
+  glow.style.opacity = '0.84';
+  glow.style.transform = 'scale(1.44, 1.62)';
+  dragGlowT = setTimeout(() => { dragGlowActive = false; glow.classList.remove('drag-glow'); }, 520);
 });
 
 let dragWatch = null;
 island.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || st.typing || st.stackOpen || st.scrubbing || st.dragOut) return;
-  if (e.target.closest('button, input, a, #seek, .hf, #t-date')) return;
+  if (e.target.closest('input, #seek, .hf, [draggable="true"]')) return;
   const sx = e.clientX, sy = e.clientY;
   const clean = () => {
     window.removeEventListener('pointermove', onMove, true);
@@ -2483,10 +2681,11 @@ island.addEventListener('pointerdown', (e) => {
     dragWatch = null;
   };
   const onMove = (ev) => {
-    if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
+    if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > 7) {
       clean();
-      suppressClickUntil = Date.now() + 300;
+      suppressClickUntil = Date.now() + 60000;
       st.pillDrag = true;
+      sfx.grab();
       window.qazi.pillDragStart();
     }
   };
@@ -2497,7 +2696,7 @@ island.addEventListener('pointerdown', (e) => {
   window.addEventListener('pointercancel', clean, true);
 });
 document.addEventListener('click', (e) => {
-  if (Date.now() < suppressClickUntil && island.contains(e.target)) {
+  if ((st.pillDrag || Date.now() < suppressClickUntil) && island.contains(e.target)) {
     e.stopImmediatePropagation(); e.preventDefault();
   }
 }, true);

@@ -4,6 +4,12 @@
   font-weight: 400 700;
   font-display: swap;
 }
+@font-face {
+  font-family: "Orbitron";
+  src: url("fonts/Orbitron-Bold.woff2") format("woff2");
+  font-weight: 700 800;
+  font-display: swap;
+}
 :root {
   --c1: #6a45ff; --c2: #9466ff; --c3: #c08cff;
   --spring: cubic-bezier(.3, 1.35, .45, 1);
@@ -12,8 +18,8 @@
   --snap-curve: linear(0, 0.016 0.5%, 0.06 1%, 0.226 2%, 1.116 5.4%, 1.375 6.6%, 1.527 7.7%, 1.565 8.2%, 1.585 8.8%, 1.581 9.3%, 1.559 9.8%, 1.458 10.9%, 0.937 14.3%, 0.784 15.5%, 0.693 16.6%, 0.67 17.1%, 0.657 17.7%, 0.671 18.7%, 0.729 19.8%, 1.042 23.3%, 1.13 24.5%, 1.182 25.6%, 1.201 26.7%, 1.192 27.7%, 1.156 28.8%, 0.977 32.2%, 0.925 33.4%, 0.894 34.5%, 0.882 35.6%, 0.887 36.6%, 0.907 37.7%, 1.045 42.4%, 1.069 44.5%, 1.059 46.3%, 0.979 50.9%, 0.96 53.4%, 0.966 55.3%, 1.013 59.9%, 1.024 62.3%, 0.986 71.2%, 1.008 79.9%, 0.995 88.9%, 1);
   --glass-bg: rgba(8, 10, 16, 0.55);
   --glass-row: rgba(8, 10, 16, 0.58);
-  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, .11) 0%, rgba(255, 255, 255, .02) 48%, rgba(0, 0, 0, .14) 100%);
-  --dim: rgba(255, 255, 255, .64);
+  --glass-sheen: linear-gradient(180deg, rgba(255, 255, 255, .12) 0%, rgba(255, 255, 255, .02) 48%, rgba(0, 0, 0, .14) 100%);
+  --dim: rgba(255, 255, 255, .68);
   --h: 36px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -26,61 +32,73 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
   width: 84px; height: var(--h); border-radius: 18px;
   background: var(--glass-sheen), var(--glass-bg);
-  backdrop-filter: blur(16px) saturate(1.35);
+  backdrop-filter: blur(16px) saturate(1.4);
   overflow: hidden;
   box-shadow:
     0 6px 22px rgba(0, 0, 0, .42),
-    inset 0 1px 0 rgba(255, 255, 255, .24),
-    inset 0 -1px 0 rgba(255, 255, 255, .07),
-    inset 0 0 0 1px rgba(255, 255, 255, .13);
-  transition: width .46s var(--spring), transform .35s var(--spring), box-shadow .24s ease, opacity .18s ease;
+    inset 0 1px 0 rgba(255, 255, 255, .26),
+    inset 0 -1px 0 rgba(255, 255, 255, .08),
+    inset 0 0 0 1px rgba(255, 255, 255, .14);
+  transition: width .42s var(--spring), transform .32s var(--spring), box-shadow .22s ease, opacity .16s ease;
   will-change: width, transform;
 }
+#island::before {
+  content: ""; position: absolute; top: -20%; left: -40%; width: 52%; height: 140%;
+  background: linear-gradient(112deg, transparent 22%, rgba(255, 255, 255, .26) 50%, rgba(192, 140, 255, .18) 58%, transparent 78%);
+  transform: translateX(-120%) skewX(-16deg); opacity: 0; pointer-events: none; z-index: 4;
+}
+#island.gleaming::before { animation: glassGleam .72s cubic-bezier(.16, 1, .3, 1); }
+#island.gleaming-mega::before { animation: glassGleam .62s cubic-bezier(.16, 1, .3, 1); background: linear-gradient(112deg, transparent 15%, rgba(125, 211, 252, .45) 45%, rgba(255, 255, 255, .65) 52%, rgba(192, 140, 255, .4) 62%, transparent 82%); }
+@keyframes glassGleam { 0% { opacity: 0; transform: translateX(-110%) skewX(-18deg); } 25% { opacity: 1; } 100% { opacity: 0; transform: translateX(340%) skewX(-18deg); } }
 #island::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 3;
-  background: radial-gradient(110px 30px at var(--mx, 50%) 0%, rgba(255, 255, 255, .18), transparent 72%);
-  opacity: .55; transition: opacity .22s ease;
+  background: radial-gradient(110px 30px at var(--mx, 50%) 0%, rgba(255, 255, 255, .20), transparent 72%);
+  opacity: .58; transition: opacity .22s ease;
 }
-#island.hover { transform: translateX(-50%) scale(1.035); box-shadow: 0 8px 26px rgba(0, 0, 0, .48), inset 0 1px 0 rgba(255, 255, 255, .3), inset 0 0 0 1px rgba(255, 255, 255, .18); }
+#island.hover { transform: translateX(-50%) scale(1.035); box-shadow: 0 8px 26px rgba(0, 0, 0, .48), 0 0 18px color-mix(in srgb, var(--c2) 22%, transparent), inset 0 1px 0 rgba(255, 255, 255, .32), inset 0 0 0 1px rgba(255, 255, 255, .2); }
 /* tucked above the screen edge: only a 3px handle stays visible (nothing at all over a fullscreen app) */
 #island.tucked, #island.tucked.hover { transform: translateX(-50%) translateY(-41px); box-shadow: none; background: rgba(6, 8, 13, .62); backdrop-filter: blur(8px); transition: width .35s var(--ease), transform .35s var(--ease); }
 #island.tucked.full { transform: translateX(-50%) translateY(-48px); }
 #island.tucked .view, #island.tucked #sky { opacity: 0 !important; transition: opacity .12s; }
 #glow.off { display: none; }
-#glow.drag-glow { transition: opacity .15s, transform .22s var(--spring); }
+#glow.drag-glow { transition: opacity .12s, transform .18s var(--spring); }
 #island.grabbing {
-  transition: width .45s var(--spring), box-shadow .16s;
+  transition: width .42s var(--spring), box-shadow .14s;
   cursor: grabbing;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, .56), 0 0 22px color-mix(in srgb, var(--c2) 38%, transparent), inset 0 1px 0 rgba(255, 255, 255, .34), inset 0 0 0 1px rgba(255, 255, 255, .22);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .60), 0 0 28px color-mix(in srgb, var(--c3) 48%, transparent), inset 0 1px 0 rgba(255, 255, 255, .38), inset 0 0 0 1.2px rgba(255, 255, 255, .26);
 }
 #island.grabbing * { cursor: grabbing !important; }
-#island.snapping { transition: width .45s var(--spring), transform .48s var(--snap-curve), box-shadow .35s; }
+#island.snapping { transition: width .42s var(--spring), transform .36s var(--snap-curve), box-shadow .3s; }
 #island.merge-pull {
-  transition: width .45s var(--spring), transform .24s var(--spring), box-shadow .22s;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .55), 0 0 28px color-mix(in srgb, var(--c3) 55%, transparent), inset 0 0 0 1.5px color-mix(in srgb, var(--c3) 72%, #fff);
+  transition: width .42s var(--spring), transform .2s var(--spring), box-shadow .18s;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, .58), 0 0 34px rgba(125, 211, 252, .52), inset 0 0 0 1.6px rgba(192, 140, 255, .86);
 }
 #island.absorbing {
-  transition: width .2s, transform .11s ease-out, opacity .12s ease-out;
-  box-shadow: 0 0 26px color-mix(in srgb, var(--c3) 75%, #fff), inset 0 0 0 1.5px rgba(255, 255, 255, .65);
+  transition: width .16s, transform .08s ease-out, opacity .09s ease-out;
+  box-shadow: 0 0 32px rgba(125, 211, 252, .9), 0 0 18px rgba(192, 140, 255, .8), inset 0 0 0 2px rgba(255, 255, 255, .82);
 }
-#island.merge-burst { animation: mergeBurst .58s var(--snap-curve); }
+#island.merge-burst { animation: mergeBurst .54s var(--snap-curve); }
 @keyframes mergeBurst {
-  0% { box-shadow: 0 0 38px rgba(192, 140, 255, .85), inset 0 0 0 2px rgba(255, 255, 255, .8); transform: translateX(-50%) scale(1.13, 1.15); }
-  45% { transform: translateX(-50%) scale(0.96, 1.04); }
+  0% { box-shadow: 0 0 46px rgba(125, 211, 252, .95), 0 0 28px rgba(192, 140, 255, .9), inset 0 0 0 2.2px rgba(255, 255, 255, .92); transform: translateX(-50%) scale(1.18, 0.90); }
+  36% { transform: translateX(-50%) scale(0.95, 1.12); }
   100% { transform: translateX(-50%) scale(1); }
 }
-#island.bump { animation: bump .5s var(--snap-curve); }
-@keyframes bump { 30% { transform: translateX(-50%) scale(1.08, .94); } }
-#island.sky .view { text-shadow: 0 1px 3px rgba(10, 4, 30, .75), 0 0 10px rgba(255, 255, 255, .18); }
-#island.sky .dim, #island.sky #m-artist { color: rgba(255, 255, 255, .86); }
+#island.bump { animation: bump .44s var(--snap-curve); }
+@keyframes bump { 28% { transform: translateX(-50%) scale(1.11, .90); } 58% { transform: translateX(-50%) scale(.97, 1.04); } }
+#island.hop { animation: pillHop .5s var(--snap-curve); }
+@keyframes pillHop { 0% { transform: translateX(-50%) translateY(0) scale(1); } 35% { transform: translateX(-50%) translateY(-2.5px) scale(1.06, .95); } 65% { transform: translateX(-50%) translateY(1px) scale(.98, 1.04); } 100% { transform: translateX(-50%) translateY(0) scale(1); } }
 
-/* subtle luminous glow & crisp drop-shadow on texts & vector icons across all themes */
-#island .view { z-index: 2; text-shadow: 0 1px 2px rgba(0, 0, 0, .78), 0 0 8px rgba(255, 255, 255, .12); }
-#island #i-time, #island #t-time, #island #m-title, #island #n-title, #island #h-title, #island #tm-time {
-  text-shadow: 0 1px 3px rgba(0, 0, 0, .82), 0 0 11px rgba(255, 255, 255, .20);
+/* vivid luminous glass glow on expanded pill texts & SVG icons across ALL themes */
+#island .view { z-index: 2; text-shadow: 0 1px 2px rgba(0, 0, 0, .90), 0 0 10px rgba(255, 255, 255, .34), 0 0 20px color-mix(in srgb, var(--c3) 40%, transparent); }
+#island .dim, #island #m-artist, #island #n-body, #island #h-text, #island #t-date {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .88), 0 0 9px rgba(255, 255, 255, .28), 0 0 18px color-mix(in srgb, var(--c2) 34%, transparent);
 }
+#island #i-time, #island #t-time, #island #m-title, #island #n-title, #island #h-title, #island #tm-time, #island #g-pass, #island .strong {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .94), 0 0 12px rgba(255, 255, 255, .48), 0 0 26px color-mix(in srgb, var(--c3) 56%, transparent);
+}
+#island.sky .dim, #island.sky #m-artist { color: rgba(255, 255, 255, .88); }
 #island svg, #stack .row .ic svg {
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .62)) drop-shadow(0 0 5px rgba(255, 255, 255, .16));
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .72)) drop-shadow(0 0 6px rgba(255, 255, 255, .24));
 }
 
 #glow {
@@ -279,25 +297,31 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #stack-clear.hidden { display: none; }
 
 /* ------------------------------------------------ the face: luminous expressive eyes */
-#i-face { display: none; gap: 9px; align-items: center; height: 14px; --lx: 0px; --ly: 0px; --es: 1; }
+#i-face { display: none; gap: 9px; align-items: center; height: 14px; --lx: 0px; --ly: 0px; --es: 1; --erot: 0deg; transform: rotate(var(--erot)); transition: transform .22s var(--spring); }
 .faceon #i-face { display: inline-flex; }
 .faceon #i-time { display: none; }
 #i-face i {
   position: relative; width: 7.5px; height: 11.5px; border-radius: 50%;
   background: radial-gradient(circle at 34% 28%, #ffffff 0%, #f1f5ff 64%, #cbd5e1 100%);
-  box-shadow: 0 0 8px rgba(255, 255, 255, .42), 0 1.5px 3px rgba(0, 0, 0, .62);
+  box-shadow: 0 0 9px rgba(255, 255, 255, .52), 0 1.5px 3px rgba(0, 0, 0, .65);
   transform: translate(var(--lx), var(--ly)) scale(var(--es));
   transition: transform .13s ease-out, height .14s, width .14s, border-radius .14s, box-shadow .18s;
 }
 #i-face.blink i, #i-face.wink i:last-child { transform: translate(var(--lx), var(--ly)) scaleY(.1); transition-duration: .06s; }
 #i-face.squint i { transform: translate(var(--lx), var(--ly)) scaleY(.45); }
-#i-face.wind i { transform: translate(var(--lx), var(--ly)) scale(1.12, .68); }
-#i-face.wide i { transform: translate(var(--lx), var(--ly)) scale(1.24); box-shadow: 0 0 11px rgba(255, 255, 255, .58), 0 1px 3px rgba(0, 0, 0, .6); }
-#i-face.merge-watch i { transform: translate(var(--lx), var(--ly)) scale(1.28); box-shadow: 0 0 13px rgba(192, 140, 255, .86), 0 1px 3px rgba(0, 0, 0, .6); }
+#i-face.wind i { transform: translate(var(--lx), var(--ly)) scale(1.16, .64); box-shadow: 0 0 12px rgba(192, 140, 255, .75); }
+#i-face.wide i, #i-face.shock i { transform: translate(var(--lx), var(--ly)) scale(1.28); box-shadow: 0 0 14px rgba(255, 255, 255, .72), 0 1px 3px rgba(0, 0, 0, .6); }
+#i-face.merge-watch i { transform: translate(var(--lx), var(--ly)) scale(1.32); box-shadow: 0 0 15px rgba(125, 211, 252, .92), 0 1px 3px rgba(0, 0, 0, .6); }
+#i-face.curious { transform: rotate(-10deg); }
+#i-face.curious i:first-child { transform: translate(var(--lx), -1px) scale(1.18); }
+#i-face.curious i:last-child { transform: translate(var(--lx), .5px) scale(.86, .74); }
+#i-face.side-eye i:first-child { transform: translate(2.6px, -.3px) scaleY(.62); }
+#i-face.side-eye i:last-child { transform: translate(2.8px, 0) scale(1.08); }
+#i-face.radar i { height: 7px; width: 9px; border-radius: 4px; background: #e0f2fe; box-shadow: 0 0 13px rgba(125, 211, 252, .9), 0 0 4px #fff; }
 #i-face.look-l i { transform: translate(-3px, 0); }
 #i-face.look-r i { transform: translate(3px, 0); }
-#i-face.sleepy i { height: 3px; width: 9px; border-radius: 2px; box-shadow: 0 0 5px rgba(255, 255, 255, .28); }
-#i-face.happy i { height: 6px; width: 10px; background: transparent; box-shadow: none; filter: drop-shadow(0 0 5px rgba(255, 255, 255, .55)); border: 2.4px solid #fff; border-bottom: 0; border-radius: 10px 10px 0 0; }
+#i-face.sleepy i { height: 3px; width: 9px; border-radius: 2px; box-shadow: 0 0 5px rgba(255, 255, 255, .32); }
+#i-face.happy i { height: 6px; width: 10px; background: transparent; box-shadow: none; filter: drop-shadow(0 0 6px rgba(255, 255, 255, .68)); border: 2.4px solid #fff; border-bottom: 0; border-radius: 10px 10px 0 0; }
 
 /* ------------------------------------------------ typing on the pill */
 [data-view="input"] { padding: 0 6px 0 11px; gap: 6px; }
@@ -345,11 +369,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .row.set .go { height: 22px; padding: 0 10px; border-radius: 11px; background: rgba(255, 255, 255, .12); font-size: 11px; }
 .row.set .go:hover { background: #fff; color: #000; }
 /* ------------------------------------------------ skins, status dots, clickable status line */
-#island.sky .view { text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
 .glyph.red { color: #ff5d6c; }
 .glyph.amber { color: #ffb84d; }
 [data-view="hud"].act { cursor: pointer; }
-#dots { position: absolute; top: 4px; right: 9px; display: flex; gap: 3px; pointer-events: none; transition: opacity .15s; }
+#dots { position: absolute; top: 4px; right: 9px; display: flex; gap: 3px; pointer-events: none; transition: opacity .15s; z-index: 4; }
 #dots i { width: 5px; height: 5px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .55); }
 #dots .mic { background: #ffa726; }
 #dots .cam { background: #34d058; }
@@ -357,12 +380,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #island.tucked #dots { opacity: 0; }
 .tag {
   display: inline-flex; align-items: center; gap: 4px; height: 18px;
-  font-size: 9.5px; font-weight: 700; letter-spacing: .35px; padding: 0 7px 0 5px;
-  border-radius: 9px; background: rgba(74, 222, 128, .15); color: #86efac;
-  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, .26), 0 0 8px rgba(74, 222, 128, .12);
+  font-family: "Orbitron", "Segoe UI Variable Text", sans-serif;
+  font-size: 8.8px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+  padding: 0 8px 0 5px; border-radius: 9px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, .24), rgba(56, 189, 248, .18));
+  color: #a7f3d0;
+  text-shadow: 0 0 9px rgba(74, 222, 128, .85), 0 0 16px rgba(56, 189, 248, .45);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, .44), 0 0 12px rgba(74, 222, 128, .22);
 }
 .tag:empty { display: none; }
-.tag.bad { background: rgba(255, 77, 94, .18); color: #fda4af; box-shadow: inset 0 0 0 1px rgba(255, 77, 94, .32), 0 0 8px rgba(255, 77, 94, .15); }
+.tag.bad {
+  background: rgba(255, 77, 94, .22); color: #fecdd3;
+  text-shadow: 0 0 8px rgba(255, 77, 94, .75);
+  box-shadow: inset 0 0 0 1px rgba(255, 77, 94, .4), 0 0 10px rgba(255, 77, 94, .18);
+}
 .live-dot { width: 5px; height: 5px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 6px #4ade80; flex: none; animation: livePulse 2s ease-in-out infinite; }
 .live-dot.proxy { background: #60a5fa; box-shadow: 0 0 6px #60a5fa; }
 .live-dot.off { background: #ff5d6c; box-shadow: 0 0 6px #ff5d6c; animation: none; }
@@ -405,7 +436,8 @@ body.venom #i-face.happy i, body.venom #i-face.sleepy i { border: 0; background:
 .sws button { width: 17px; height: 17px; }
 
 /* ------------------------------------------------ scenes: cloud (white by day: dark text), aurora, ocean, fire */
-#fx { position: absolute; top: 0; left: 50%; width: 700px; height: 110px; margin-left: -350px; pointer-events: none; }
+#fx { position: absolute; top: 0; left: 50%; width: 700px; height: 110px; margin-left: -350px; pointer-events: none; z-index: 1; }
+#fx-top { position: absolute; top: 0; left: 50%; width: 700px; height: 170px; margin-left: -350px; pointer-events: none; z-index: 6; }
 body.cloud #island { box-shadow: none; }
 body.daylight #island .view { color: #18222f; text-shadow: none; }
 body.daylight #island .dim, body.daylight #island #m-artist, body.daylight #island #h-text { color: rgba(24, 34, 47, .62); }

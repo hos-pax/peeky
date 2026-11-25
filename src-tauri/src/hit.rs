@@ -709,19 +709,33 @@ pub fn start() {
                                 let mut merge_dir = 0.0;
                                 let mut cancel_pull = false;
                                 if dual && label == "secondary" {
+                                    let sec_idx = find_mon_idx(&mons, &s.monitor_name);
+                                    let sm = &mons[sec_idx];
                                     let mm_cx = (main_mon.x + main_mon.w / 2) as f64;
                                     let mm_y = (main_mon.y + OFFSET_Y.load(SeqCst) as i32) as f64;
                                     let ddx = attracted_cx as f64 - mm_cx;
                                     let ddy = attracted_y as f64 - mm_y;
                                     let dist_main = (ddx * ddx + ddy * ddy).sqrt();
                                     let on_main = cur_mon_idx == main_mon_idx;
-                                    merge_hot = on_main || dist_main < 340.0 * main_mon.scale;
+                                    let no_left = mons.len() == 2 && !mons.iter().any(|m| m.x + m.w <= sm.x + 10);
+                                    let no_right = mons.len() == 2 && !mons.iter().any(|m| m.x >= sm.x + sm.w - 10);
+                                    let dead_wall = pd.max_pull_dist > (120.0 * sm.scale) as i32
+                                        && ((no_left && pt.x <= sm.x + 18) || (no_right && pt.x >= sm.x + sm.w - 18));
+                                    merge_hot = on_main || dist_main < 460.0 * main_mon.scale || dead_wall;
                                     if merge_hot {
-                                        merge_charge = (1.0 - dist_main / (780.0 * main_mon.scale)).clamp(0.42, 1.0);
-                                    } else if dist_main < 720.0 * main_mon.scale {
-                                        merge_charge = ((720.0 * main_mon.scale - dist_main) / (380.0 * main_mon.scale) * 0.42).clamp(0.0, 0.42);
+                                        merge_charge = if dead_wall {
+                                            0.92
+                                        } else {
+                                            (1.0 - dist_main / (840.0 * main_mon.scale)).clamp(0.48, 1.0)
+                                        };
+                                    } else if dist_main < 860.0 * main_mon.scale {
+                                        merge_charge = ((860.0 * main_mon.scale - dist_main) / (400.0 * main_mon.scale) * 0.48).clamp(0.0, 0.48);
                                     }
-                                    merge_dir = (ddx / (main_mon.w as f64 * 0.45)).clamp(-1.0, 1.0);
+                                    merge_dir = if dead_wall {
+                                        if no_right { 1.0 } else { -1.0 }
+                                    } else {
+                                        (ddx / (main_mon.w as f64 * 0.45)).clamp(-1.0, 1.0)
+                                    };
                                     let now_pull = merge_charge > 0.03;
                                     if pd.merge_active && !now_pull {
                                         cancel_pull = true;
@@ -772,7 +786,9 @@ pub fn start() {
                                         let no_right = !mons.iter().any(|m| m.x >= sm.x + sm.w - 10);
                                         let dead_wall = pd_done.max_pull_dist > (130.0 * sm.scale) as i32
                                             && ((no_left && pt.x <= sm.x + 14) || (no_right && pt.x >= sm.x + sm.w - 14));
-                                        if cur_mon_idx == main_mon_idx || dist_main < 340.0 * main_mon.scale || dead_wall {
+                                        let fast_flick = (pd_done.vx > 20.0 && main_mon.x >= sm.x + sm.w - 10)
+                                            || (pd_done.vx < -20.0 && main_mon.x + main_mon.w <= sm.x + 10);
+                                        if cur_mon_idx == main_mon_idx || dist_main < 460.0 * main_mon.scale || dead_wall || fast_flick {
                                             merge_into_main = true;
                                             main_mon_idx
                                         } else {
@@ -817,7 +833,7 @@ pub fn start() {
                                     vy: vy_sec,
                                     to_mon: dest.name.clone(),
                                     step: 0,
-                                    max_steps: if merge_into_main { 24 } else { 44 },
+                                    max_steps: if merge_into_main { 22 } else { 36 },
                                     switched,
                                     merge_into_main,
                                     impact_speed: (vx_sec * vx_sec + vy_sec * vy_sec).sqrt(),
@@ -881,9 +897,9 @@ pub fn start() {
                     continue;
                 }
 
-                // 2) Second-order spring flight to top-center (or merge rocket into main!)
+                // 2) Fast snappy second-order spring flight to top-center (or rocket merge into main!)
                 enum AnimResult {
-                    Fly(i32, i32, i32, i32, bool, Option<(f64, f64, f64)>),
+                    Fly(i32, i32, i32, i32, bool, f64, f64, f64),
                     Land(i32, i32, i32, i32, MonInfo, bool, f64),
                     Merged(MonInfo, f64),
                 }
@@ -896,7 +912,7 @@ pub fn start() {
                         let (tx, ty, tw, th) = center_rect_on(&dest);
                         let target_cx = tx as f64 + tw as f64 / 2.0;
                         let target_y = ty as f64;
-                        let (k, damp) = if sa.merge_into_main { (540.0, 31.0) } else { (320.0, 24.5) };
+                        let (k, damp) = if sa.merge_into_main { (740.0, 29.0) } else { (520.0, 25.5) };
                         let sub_dt = 0.008f64;
                         for _ in 0..2 {
                             let ax = (target_cx - sa.cx) * k - sa.vx * damp;
@@ -910,27 +926,28 @@ pub fn start() {
                         let dist = ((target_cx - sa.cx).powi(2) + (target_y - sa.y).powi(2)).sqrt();
                         let speed = (sa.vx * sa.vx + sa.vy * sa.vy).sqrt();
                         sa.impact_speed = sa.impact_speed.max(speed);
-                        let close_merge = sa.merge_into_main && ((sa.step >= 8 && dist < 30.0 * dest.scale) || sa.step >= sa.max_steps);
-                        let close_snap = !sa.merge_into_main && ((dist < 1.3 * dest.scale && speed < 38.0 * dest.scale) || sa.step >= sa.max_steps);
+                        let close_merge = sa.merge_into_main && ((sa.step >= 7 && dist < 34.0 * dest.scale) || sa.step >= sa.max_steps);
+                        let close_snap = !sa.merge_into_main && ((dist < 1.8 * dest.scale && speed < 48.0 * dest.scale) || sa.step >= sa.max_steps);
                         let win_x = (sa.cx - tw as f64 / 2.0).round() as i32;
                         let win_y = sa.y.round() as i32;
                         if close_merge {
-                            let impact = (sa.impact_speed / (2200.0 * dest.scale)).clamp(0.45, 1.0);
+                            let impact = (sa.impact_speed / (2200.0 * dest.scale)).clamp(0.55, 1.25);
                             s.snap_anim = None;
                             Some(AnimResult::Merged(dest, impact))
                         } else if close_snap {
-                            let impact = (sa.impact_speed / (2200.0 * dest.scale)).clamp(0.25, 1.0);
+                            let impact = (sa.impact_speed / (2100.0 * dest.scale)).clamp(0.32, 1.15);
                             let switched = sa.switched;
                             s.snap_anim = None;
                             Some(AnimResult::Land(tx, ty, tw, th, dest, switched, impact))
                         } else {
-                            let absorb = if sa.merge_into_main {
-                                let p = (1.0 - (dist / (380.0 * dest.scale)).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-                                Some((p, (sa.vx * 0.016 / dest.scale).clamp(-55.0, 55.0), (sa.vy * 0.016 / dest.scale).clamp(-55.0, 55.0)))
+                            let vx_n = (sa.vx * 0.016 / dest.scale).clamp(-58.0, 58.0);
+                            let vy_n = (sa.vy * 0.016 / dest.scale).clamp(-58.0, 58.0);
+                            let prog = if sa.merge_into_main {
+                                (1.0 - (dist / (420.0 * dest.scale)).clamp(0.0, 1.0)).clamp(0.0, 1.0)
                             } else {
-                                None
+                                (1.0 - (dist / (320.0 * dest.scale)).clamp(0.0, 1.0)).clamp(0.0, 1.0)
                             };
-                            Some(AnimResult::Fly(win_x, win_y, tw, th, sa.merge_into_main, absorb))
+                            Some(AnimResult::Fly(win_x, win_y, tw, th, sa.merge_into_main, prog, vx_n, vy_n))
                         }
                     })
                 };
@@ -945,13 +962,22 @@ pub fn start() {
                             emit_monitor_state(&label, &dest, mons.len(), dual);
                             sys::emit_to(&label, "pill-landed", json!({ "isPrimary": dest.primary, "switched": switched, "impact": impact }));
                         }
-                        AnimResult::Fly(cx, cy, tw, th, is_merge, absorb) => {
+                        AnimResult::Fly(cx, cy, tw, th, is_merge, prog, vx_n, vy_n) => {
                             let _ = SetWindowPos(h, Some(HWND_TOPMOST), cx, cy, tw, th, SWP_NOACTIVATE);
-                            if is_merge {
-                                if let Some((p, vx, vy)) = absorb {
-                                    sys::emit_to(&label, "drag-fx", json!({ "active": true, "absorbing": true, "absorbProgress": p, "vx": vx, "vy": vy, "mergeHot": true }));
-                                }
-                            }
+                            sys::emit_to(
+                                &label,
+                                "drag-fx",
+                                json!({
+                                    "active": true,
+                                    "flying": true,
+                                    "absorbing": is_merge,
+                                    "absorbProgress": if is_merge { prog } else { 0.0 },
+                                    "vx": vx_n,
+                                    "vy": vy_n,
+                                    "magnet": if !is_merge { prog * 0.8 } else { 0.0 },
+                                    "mergeHot": is_merge,
+                                }),
+                            );
                         }
                     }
                     continue;
