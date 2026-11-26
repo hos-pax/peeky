@@ -91,6 +91,20 @@ fn png_format() -> u32 {
     unsafe { RegisterClipboardFormatW(w!("PNG")) }
 }
 
+pub fn read_text() -> Option<String> {
+    let _c = Clipboard::open()?;
+    if !has(CF_UNICODETEXT) {
+        return None;
+    }
+    unsafe { get_bytes(CF_UNICODETEXT) }.map(|b| {
+        sys::from_wide(
+            &b.chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        )
+    })
+}
+
 pub fn write_text(text: &str) -> bool {
     QUIET_UNTIL.store(sys::now_ms() + 1500, SeqCst);
     let Some(_c) = Clipboard::open() else { return false };

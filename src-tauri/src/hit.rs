@@ -1,17 +1,18 @@
 // Mouse, focus, multi-monitor placement, free 2D slingshot drag, spring snap, and dual-island merge.
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering::SeqCst};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering::SeqCst};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::Win32::Foundation::*;
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::{poll, settings, sys};
+use crate::{audio, persian, poll, settings, sys};
 
 pub const WIN_W: f64 = 700.0;
 pub const WIN_H: f64 = 430.0;
@@ -75,12 +76,20 @@ struct WinSlot {
     monitor_name: String,
     is_primary: bool,
     last_state_json: String,
+    pill_width: f64,
+    stack_open: bool,
     pill_drag: Option<PillDrag>,
     snap_anim: Option<SnapAnim>,
 }
 
 static SLOTS: Mutex<Vec<WinSlot>> = Mutex::new(Vec::new());
 static MON_CACHE: Mutex<Option<(Instant, Vec<MonInfo>)>> = Mutex::new(None);
+static WHEEL_ENABLE: AtomicBool = AtomicBool::new(false);
+static WHEEL_L: AtomicI32 = AtomicI32::new(0);
+static WHEEL_T: AtomicI32 = AtomicI32::new(0);
+static WHEEL_R: AtomicI32 = AtomicI32::new(0);
+static WHEEL_B: AtomicI32 = AtomicI32::new(0);
+static WHEEL_TX: OnceLock<mpsc::SyncSender<(f32, bool)>> = OnceLock::new();
 
 fn slot_hwnd(raw: isize) -> HWND {
     HWND(raw as *mut c_void)
@@ -255,6 +264,8 @@ pub fn register_window(win: &WebviewWindow) {
             monitor_name: mon.name.clone(),
             is_primary: mon.primary,
             last_state_json: String::new(),
+            pill_width: 84.0,
+            stack_open: false,
             pill_drag: None,
             snap_anim: None,
         });
@@ -342,6 +353,36 @@ pub fn set_interactive(label: &str, on: bool) {
             unsafe { apply_style(h, interactive, typing) };
         }
     }
+}
+
+pub fn set_pill_width(label: &str, w: f64) {
+    let mut slots = SLOTS.lock().unwrap();
+    if let Some(s) = slots.iter_mut().find(|s| s.label == label) {
+        s.pill_width = w.clamp(0.0, 660.0);
+    }
+}
+
+pub fn set_stack_open(label: &str, open: bool) {
+    let mut slots = SLOTS.lock().unwrap();
+    if let Some(s) = slots.iter_mut().find(|s| s.label == label) {
+        s.stack_open = open;
+    }
+}
+
+pub fn main_bounds_for_ambient() -> Option<(i32, i32, i32, i32, bool)> {
+    let slots = SLOTS.lock().unwrap();
+    let s = slots.iter().find(|s| s.label == "main")?;
+    if s.hwnd_raw == 0 || s.pill_width < 20.0 {
+        return None;
+    }
+    let h = slot_hwnd(s.hwnd_raw);
+    let r = sys::rect_of(h);
+    let scale = unsafe { GetDpiForWindow(h).max(96) as f64 / 96.0 };
+    let cx = (r.left + r.right) / 2;
+    let w = (s.pill_width * scale).round() as i32;
+    let hgt = (36.0 * scale).round() as i32;
+    let vis = s.pill_drag.is_none() && s.snap_anim.is_none() && unsafe { IsWindowVisible(h).as_bool() };
+    Some((cx, r.top + (8.0 * scale).round() as i32, w, hgt, vis))
 }
 
 unsafe fn apply_style(h: HWND, interactive: bool, typing: bool) {
@@ -1039,6 +1080,37 @@ pub fn start() {
                             s.was_near = near;
                             emit_cur = true;
                         }
+                        if s.pill_width >= 20.0 && !s.stack_open && s.pill_drag.is_none() && s.snap_anim.is_none() {
+                            let half = (s.pill_width * scale * 0.5).round() as i32 + 10;
+                            let cx = (r.left + r.right) / 2;
+                            let top = r.top + (2.0 * scale).round() as i32;
+                            let bot = r.top + (52.0 * scale).round() as i32;
+                            let l = cx - half;
+                            let ri = cx + half;
+                            if pt.x >= l && pt.x <= ri && pt.y >= top && pt.y <= bot {
+                                WHEEL_L.store(l, std::sync::atomic::Ordering::Relaxed);
+                                WHEEL_T.store(top, std::sync::atomic::Ordering::Relaxed);
+                                WHEEL_R.store(ri, std::sync::atomic::Ordering::Relaxed);
+                                WHEEL_B.store(bot, std::sync::atomic::Ordering::Relaxed);
+                                WHEEL_ENABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+                            } else if label == "main" {
+                                // Only turn off if cursor isn't inside secondary pill either
+                                let in_other = slots.iter().any(|o| {
+                                    if o.label == label || o.pill_width < 20.0 || o.stack_open { return false; }
+                                    let oh = slot_hwnd(o.hwnd_raw);
+                                    let or = sys::rect_of(oh);
+                                    let osc = GetDpiForWindow(oh).max(96) as f64 / 96.0;
+                                    let ocx = (or.left + or.right) / 2;
+                                    let ohalf = (o.pill_width * osc * 0.5).round() as i32 + 10;
+                                    pt.x >= ocx - ohalf && pt.x <= ocx + ohalf && pt.y >= or.top && pt.y <= or.top + (52.0 * osc).round() as i32
+                                });
+                                if !in_other {
+                                    WHEEL_ENABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                                }
+                            }
+                        } else {
+                            WHEEL_ENABLE.store(false, std::sync::atomic::Ordering::Relaxed);
+                        }
                         if d && !s.down && s.interactive && near {
                             let hit = sys::root_of(WindowFromPoint(pt));
                             if hit == h {
@@ -1079,36 +1151,119 @@ pub fn start() {
     });
 }
 
-/// The quick-note shortcut (Ctrl+Alt+N). Registered on its own thread, switched with the setting.
+/// Low-level hover mouse wheel hook: allows smooth OS/Music & Shift+App volume control while cursor is on the island
+/// even when the island window uses WS_EX_NOACTIVATE (unfocused).
+unsafe extern "system" fn ll_mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 && wparam.0 as u32 == WM_MOUSEWHEEL && WHEEL_ENABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+        let x = info.pt.x;
+        let y = info.pt.y;
+        if x >= WHEEL_L.load(std::sync::atomic::Ordering::Relaxed)
+            && x <= WHEEL_R.load(std::sync::atomic::Ordering::Relaxed)
+            && y >= WHEEL_T.load(std::sync::atomic::Ordering::Relaxed)
+            && y <= WHEEL_B.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let raw_delta = ((info.mouseData >> 16) as u16) as i16;
+            let notches = raw_delta as f32 / 120.0;
+            let shift = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+            if notches.abs() > 0.01 {
+                if let Some(tx) = WHEEL_TX.get() {
+                    let _ = tx.try_send((notches, shift));
+                }
+                return LRESULT(1);
+            }
+        }
+    }
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
+pub fn start_wheel_hook() {
+    let (tx, rx) = mpsc::sync_channel::<(f32, bool)>(64);
+    let _ = WHEEL_TX.set(tx);
+    std::thread::spawn(move || unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        while let Ok((notches, shift)) = rx.recv() {
+            let mut sum = notches;
+            let mut mode_shift = shift;
+            while let Ok((n, s)) = rx.try_recv() {
+                if s == mode_shift {
+                    sum += n;
+                } else {
+                    break;
+                }
+            }
+            if mode_shift {
+                if let Some((app, pct)) = audio::adjust_active_app_volume(sum * 0.04) {
+                    sys::helper(json!({ "t": "app-vol", "app": app, "pct": pct }));
+                }
+            } else if let Some((lvl, mute)) = audio::step_volume(sum * 0.025) {
+                let level = (lvl * 100.0).round() / 100.0;
+                sys::helper(json!({ "t": "vol", "level": level, "mute": mute, "fast": true }));
+            }
+        }
+    });
+    std::thread::spawn(|| unsafe {
+        let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(ll_mouse_proc), None, 0);
+        if let Ok(hh) = hook {
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            let _ = UnhookWindowsHookEx(hh);
+        }
+    });
+}
+
+/// Global shortcuts: Ctrl+Alt+N note, Ctrl+Alt+T OCR, Ctrl+Alt+F En<->Fa rescue, Ctrl+Alt+Z ZWNJ polish, Ctrl+Alt+G game HUD.
 pub static HOTKEY_WANTED: AtomicBool = AtomicBool::new(true);
+pub static PERSIAN_HOTKEY_WANTED: AtomicBool = AtomicBool::new(true);
 pub fn start_hotkey() {
     std::thread::spawn(|| unsafe {
-        let mut have = false;
-        let mut failed = false;
+        let mut have_core = false;
+        let mut have_persian = false;
         loop {
-            let want = HOTKEY_WANTED.load(SeqCst);
-            if want && !have && !failed {
-                have = RegisterHotKey(None, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'N' as u32).is_ok();
-                if !have {
-                    failed = true;
-                    sys::log("Ctrl+Alt+N is taken by another program: quick-note shortcut is off");
-                } else if RegisterHotKey(None, 2, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32).is_err() {
-                    sys::log("Ctrl+Alt+T is taken by another program: text-grab shortcut is off");
+            let want_core = HOTKEY_WANTED.load(SeqCst);
+            if want_core && !have_core {
+                have_core = true;
+                if RegisterHotKey(None, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'N' as u32).is_err() {
+                    sys::log("Ctrl+Alt+N is taken by another program");
                 }
-            } else if !want && have {
+                if RegisterHotKey(None, 2, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T' as u32).is_err() {
+                    sys::log("Ctrl+Alt+T is taken by another program");
+                }
+                let _ = RegisterHotKey(None, 5, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'G' as u32);
+            } else if !want_core && have_core {
                 let _ = UnregisterHotKey(None, 1);
                 let _ = UnregisterHotKey(None, 2);
-                have = false;
+                let _ = UnregisterHotKey(None, 5);
+                have_core = false;
             }
-            if !want {
-                failed = false;
+            let want_fa = PERSIAN_HOTKEY_WANTED.load(SeqCst);
+            if want_fa && !have_persian {
+                have_persian = true;
+                if RegisterHotKey(None, 3, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'F' as u32).is_err() {
+                    sys::log("Ctrl+Alt+F is taken by another program");
+                }
+                if RegisterHotKey(None, 4, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'Z' as u32).is_err() {
+                    sys::log("Ctrl+Alt+Z is taken by another program");
+                }
+            } else if !want_fa && have_persian {
+                let _ = UnregisterHotKey(None, 3);
+                let _ = UnregisterHotKey(None, 4);
+                have_persian = false;
             }
             let mut msg = MSG::default();
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_HOTKEY && msg.wParam.0 == 2 {
-                    crate::ocr::start();
-                } else if msg.message == WM_HOTKEY {
-                    sys::emit_to("main", "hotkey", "note");
+                if msg.message == WM_HOTKEY {
+                    match msg.wParam.0 {
+                        1 => sys::emit_to("main", "hotkey", "note"),
+                        2 => crate::ocr::start(),
+                        3 => persian::rescue_selection("layout"),
+                        4 => persian::rescue_selection("zwnj"),
+                        5 => sys::emit("hotkey", "game-peek"),
+                        _ => {}
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(40));

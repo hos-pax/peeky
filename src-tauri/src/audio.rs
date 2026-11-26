@@ -2,10 +2,11 @@
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::time::{Duration, Instant};
 
-use windows::core::GUID;
+use windows::core::{GUID, Interface};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
+use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use crate::sys;
 
@@ -37,6 +38,64 @@ pub fn toggle_mute() {
             let m = v.GetMute().map(|b| b.as_bool()).unwrap_or(false);
             let _ = v.SetMute(!m, &GUID::zeroed());
         }
+    }
+}
+
+pub fn step_volume(delta: f32) -> Option<(f32, bool)> {
+    unsafe {
+        let v = endpoint().ok()?;
+        let cur = v.GetMasterVolumeLevelScalar().ok()?;
+        let next = (cur + delta).clamp(0.0, 1.0);
+        let _ = v.SetMasterVolumeLevelScalar(next, &GUID::zeroed());
+        if next > 0.0 {
+            let _ = v.SetMute(false, &GUID::zeroed());
+        }
+        Some((next, next <= 0.001))
+    }
+}
+
+/// Adjusts the audio session volume (`Shift + Scroll`) of the foreground app, or the active audio session if foreground has none.
+pub fn adjust_active_app_volume(delta: f32) -> Option<(String, u32)> {
+    unsafe {
+        let e: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+        let dev = e.GetDefaultAudioEndpoint(eRender, eMultimedia).ok()?;
+        let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None).ok()?;
+        let enu = mgr.GetSessionEnumerator().ok()?;
+        let n = enu.GetCount().ok()?;
+        let fg_pid = sys::pid_of(GetForegroundWindow());
+        let me = std::process::id();
+
+        let mut fallback: Option<(ISimpleAudioVolume, String)> = None;
+        let mut target: Option<(ISimpleAudioVolume, String)> = None;
+
+        for i in 0..n {
+            let Ok(ctrl) = enu.GetSession(i) else { continue };
+            let Ok(c2) = ctrl.cast::<IAudioSessionControl2>() else { continue };
+            let pid = c2.GetProcessId().unwrap_or(0);
+            if pid == 0 || pid == me {
+                continue;
+            }
+            let Ok(vol) = ctrl.cast::<ISimpleAudioVolume>() else { continue };
+            let name = sys::exe_of_pid(pid)
+                .and_then(|p| std::path::Path::new(&p).file_stem().map(|s| s.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "App".into());
+            if pid == fg_pid {
+                target = Some((vol, name));
+                break;
+            }
+            if fallback.is_none() && ctrl.GetState().is_ok_and(|s| s == AudioSessionStateActive) {
+                fallback = Some((vol, name));
+            }
+        }
+
+        let (vol, name) = target.or(fallback)?;
+        let cur = vol.GetMasterVolume().ok()?;
+        let next = (cur + delta).clamp(0.0, 1.0);
+        let _ = vol.SetMasterVolume(next, &GUID::zeroed());
+        if next > 0.0 {
+            let _ = vol.SetMute(false, &GUID::zeroed());
+        }
+        Some((name, (next * 100.0).round() as u32))
     }
 }
 

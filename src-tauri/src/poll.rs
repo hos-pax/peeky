@@ -16,7 +16,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::media::{wait, Media};
 use crate::notif::Notifs;
-use crate::{audio, clip, hit, net, sys};
+use crate::telemetry::TelemetryState;
+use crate::{audio, clip, hit, net, sys, telemetry};
 
 pub enum Cmd {
     Toggle,
@@ -144,6 +145,7 @@ pub fn start() {
         let mut notifs = Notifs::new();
         let mut bt = Bluetooth::new();
         let mut watch = net::Watch::new();
+        let mut telem = TelemetryState::new();
         let mut last_vol = String::new();
         let mut clip_seq = clip::sequence();
         let mut cover_map: HashMap<String, (i32, i32)> = HashMap::new();
@@ -233,12 +235,13 @@ pub fn start() {
                     let s = cover_state_for(me, ih);
                     if s >= 0 {
                         let full = foreground_fullscreen_for(me, ih);
-                        let s = s + if full { 10 } else { 0 };
+                        let game = full && settings::flag("gameStealth") && telemetry::classify_fullscreen_is_game(me, ih);
+                        let s = s + if full { 10 } else { 0 } + if game { 100 } else { 0 };
                         let entry = cover_map.entry(label.clone()).or_insert((-1, -1));
                         // report only once the state has been stable for two polls
                         if s == entry.1 && s != entry.0 {
                             entry.0 = s;
-                            sys::helper_to(&label, json!({ "t": "cover", "covered": s % 10 == 1, "full": full }));
+                            sys::helper_to(&label, json!({ "t": "cover", "covered": s % 10 == 1, "full": full, "game": game }));
                         }
                         entry.1 = s;
                     }
@@ -250,6 +253,12 @@ pub fn start() {
                     clip_seq = n;
                     clip::changed();
                 }
+            }
+            if start.elapsed() > Duration::from_secs(1) && every("ambient", 380) {
+                telemetry::tick_ambient(&mut telem);
+            }
+            if start.elapsed() > Duration::from_secs(2) && every("telemetry", 1800) {
+                telemetry::tick(&mut telem);
             }
             if start.elapsed() > Duration::from_secs(3) && every("net", 2500) {
                 watch.poll_net();

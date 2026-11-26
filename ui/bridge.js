@@ -18,12 +18,20 @@ window.qazi = {
   onMonitorState: on('monitor-state'), onDragFx: on('drag-fx'), onPillLanded: on('pill-landed'), onMergePull: on('merge-pull'), onMergeComplete: on('merge-complete'),
 
   setInteractive: (v) => quiet(invoke('set_interactive', { on: !!v })),
+  setPillWidth: (w) => quiet(invoke('set_pill_width', { w: Number(w) || 0 })),
+  setStackOpen: (open) => quiet(invoke('set_stack_open', { open: !!open })),
   setTyping: (v, restore) => invoke('set_typing', { on: !!v, restore: !!restore }).catch(() => ({})),
   lostClick: (info) => quiet(invoke('lost_click', { info: String(info) })),
   pillDragStart: () => quiet(invoke('pill_drag_start')),
   switchMonitor: () => quiet(invoke('switch_monitor')),
   getMonitorState: () => invoke('monitor_state').catch(() => null),
   toggleDual: () => quiet(invoke('toggle_dual')),
+
+  telemetryGet: () => invoke('telemetry_get').catch(() => ({})),
+  watchdogScan: () => invoke('watchdog_scan').catch(() => []),
+  watchdogClean: () => invoke('watchdog_clean').catch(() => ({ ok: false })),
+  watchdogKill: (pid) => invoke('watchdog_kill', { pid: Number(pid) }).catch(() => false),
+  persianFix: (mode, text) => invoke('persian_fix', { mode: String(mode), text: String(text || '') }).catch(() => ({ text: String(text || ''), lang: '' })),
 
   media: (cmd) => quiet(invoke('media', { cmd })),
   seek: (ms) => quiet(invoke('seek', { ms })),

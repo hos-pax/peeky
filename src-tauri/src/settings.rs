@@ -11,7 +11,12 @@ use crate::sys;
 
 static SETTINGS: Mutex<Option<Map<String, Value>>> = Mutex::new(None);
 const THEMES: [&str; 10] = ["black", "nebula", "crystal", "ember", "reactor", "venom", "cloud", "water", "lava", "ice"];
-const BOOLS: [&str; 18] = ["autoUpdate", "musicReact", "netAlerts", "sensorDot", "smartCopy", "autoHide", "hideVideo", "copyPreview", "clipHistory", "deviceAlerts", "downloadAlerts", "shelf", "visuals", "noteHotkey", "vaultSymbols", "dualMonitors", "secondaryAlwaysOpen", "soundFx"];
+const BOOLS: [&str; 23] = [
+    "autoUpdate", "musicReact", "netAlerts", "sensorDot", "smartCopy", "autoHide", "hideVideo",
+    "copyPreview", "clipHistory", "deviceAlerts", "downloadAlerts", "shelf", "visuals",
+    "noteHotkey", "vaultSymbols", "dualMonitors", "secondaryAlwaysOpen", "soundFx",
+    "gameStealth", "agentPulse", "watchdogAlerts", "chameleonGlass", "persianHotkeys",
+];
 const CALENDARS: [&str; 4] = ["gregorian", "shamsi", "shamsi-fa", "both"];
 
 fn defaults() -> Map<String, Value> {
@@ -26,6 +31,7 @@ fn defaults() -> Map<String, Value> {
         "musicTheme": "sky",        // what plays behind the track: "sky" (colours of the cover) or a skin
         "netAlerts": true, "sensorDot": true, "smartCopy": true, "musicReact": true, "autoUpdate": true,
         "dualMonitors": false, "secondaryAlwaysOpen": true, "monitorName": "", "soundFx": true,
+        "gameStealth": true, "agentPulse": true, "watchdogAlerts": true, "chameleonGlass": true, "persianHotkeys": true,
     })
     .as_object()
     .cloned()
@@ -121,6 +127,7 @@ pub fn apply(key: &str, value: &Value) {
         _ => return,
     }
     crate::hit::HOTKEY_WANTED.store(flag("noteHotkey"), std::sync::atomic::Ordering::SeqCst);
+    crate::hit::PERSIAN_HOTKEY_WANTED.store(flag("persianHotkeys"), std::sync::atomic::Ordering::SeqCst);
     if matches!(key, "dualMonitors" | "secondaryAlwaysOpen" | "monitorName") {
         crate::hit::on_settings_changed();
     }

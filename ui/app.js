@@ -55,6 +55,8 @@ const ICONS = {
   edit: `<path ${S} d="M4.5 19.5h4l10-10-4-4-10 10zM13 7l4 4"/>`,
   gear: `<circle ${S} cx="12" cy="12" r="2.8"/><path ${S} d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4L18 18M18 6l-1.6 1.6M7.6 16.4L6 18"/>`,
   monitor: `<rect ${S} x="3" y="4" width="18" height="12" rx="2.2"/><path ${S} d="M8 20h8M12 16v4"/>`,
+  activity: `<path ${S} d="M3 12h4l2.5-6 4 12 2.5-6H21"/>`,
+  wand: `<path ${S} d="M15 4l5 5L8 21l-5-5zM13 6l5 5"/>`,
 };
 const svg = (name) => `<svg viewBox="0 0 24 24">${ICONS[name] || ''}</svg>`;
 const setIcon = (el, name) => { if (el.dataset.cur !== name) { el.innerHTML = svg(name); el.dataset.cur = name; } };
@@ -75,7 +77,7 @@ const st = {
   hudUntil: 0,                                     // short status line (copied / charger / Bluetooth / files held)
   shelf: [], dragAt: 0,                            // files parked on the pill; dragAt = a file is being dragged over it
   scrubbing: false,
-  volUntil: 0, volSeen: false, vol: 50, mute: false, volLocalAt: 0,
+  volUntil: 0, volSeen: false, vol: 50, mute: false, volLocalAt: 0, volApp: '',
   media: { active: false, playing: false, title: '', artist: '', pos: 0, dur: 0, at: 0, key: '', video: false },
   pausedAt: 0, force: null,
   // menu mode: while music plays the pill behaves like the normal clock/menu instead of the player,
@@ -84,7 +86,7 @@ const st = {
   // settings
   autoHide: true, hideVideo: true, calendar: 'gregorian', deviceAlerts: true, shelfOn: true, visuals: true,
   // auto-hide: tuck above the screen edge while an app window sits underneath (always for fullscreen apps)
-  covered: false, full: false, tucked: false, peekSince: 0, revealUntil: 0,
+  covered: false, full: false, game: false, gamePeek: false, tucked: false, peekSince: 0, revealUntil: 0,
   typing: false, holdUntil: 0,                     // a text field is open on the pill / something opened from outside stays put
   parked: false,                                   // a password step waits on the pill while the user works in another window
   keys: false,                                     // a search box under the pill holds the keyboard
@@ -93,7 +95,9 @@ const st = {
   gen: { pass: '', len: 18, symbols: true },
   skin: 'black', musicTheme: 'sky',                // what the pill wears at rest / while music plays
   net: { online: true, vpn: '', proxy: false }, sensors: { mic: [], cam: [] },
+  telem: {}, agent: { state: 'idle' }, ambientMode: 'off', caches: null,
   smartCopy: true, hudAct: null, muteClipUntil: 0, react: true, soundFx: true,
+  gameStealth: true, agentPulse: true, watchdogAlerts: true, chameleonGlass: true, persianHotkeys: true,
   onSecondary: false, monitorCount: 1, dualMonitors: false, secondaryAlwaysOpen: true, pillDrag: false,
 };
 // the window takes the mouse only while the cursor is on the island (or a text field is open)
@@ -114,6 +118,7 @@ const glanceOpen = () => st.onSecondary && st.secondaryAlwaysOpen;
 function pickView() {
   const now = Date.now();
   if (st.force) return st.force;
+  if (st.game && st.gamePeek) return 'game';
   if (st.typing) return 'input';
   if (dragging()) return 'drop';
   if (st.notif) return 'notif';
@@ -131,18 +136,20 @@ const dragging = () => st.shelfOn && Date.now() - st.dragAt < 350;
 function updateTuck() {
   const now = Date.now();
   const glance = glanceOpen();
-  const want = !st.force && !st.pillDrag && (glance ? (st.full && st.hideVideo) : (st.full || (st.autoHide && st.covered)));
-  // dwelling on the very top edge of the screen peeks the island back out
-  if (want && st.tucked && st.peekSince && now - st.peekSince > 220) { st.revealUntil = now + 1400; st.peekSince = 0; }
-  const reveal = st.notif || now < st.volUntil || now < st.hudUntil || dragging() || st.dragOut || st.scrubbing || st.hover || st.typing || timer.running || (st.shelfOn && st.shelf.length && !st.full) || st.stackOpen || st.manual === 'gen' || now < st.revealUntil || now < st.holdUntil || (!st.tucked && now - st.leftAt < 900);   // a running timer stays on screen, fullscreen or not
+  const want = !st.force && !st.pillDrag && !st.gamePeek && (st.game || (glance ? (st.full && st.hideVideo) : (st.full || (st.autoHide && st.covered))));
+  // dwelling on the very top edge of the screen peeks the island back out (disabled during fullscreen games unless Ctrl+Alt+G)
+  if (want && !st.game && st.tucked && st.peekSince && now - st.peekSince > 220) { st.revealUntil = now + 1400; st.peekSince = 0; }
+  const reveal = st.gamePeek || (!st.game && (st.notif || now < st.volUntil || now < st.hudUntil || dragging() || st.dragOut || st.scrubbing || st.hover || st.typing || timer.running || (st.shelfOn && st.shelf.length && !st.full) || st.stackOpen || st.manual === 'gen' || now < st.revealUntil || now < st.holdUntil || (!st.tucked && now - st.leftAt < 900)));
   const tucked = !!(want && !reveal);
   island.classList.toggle('full', st.full);
+  island.classList.toggle('game', st.game && !st.gamePeek);
   if (tucked !== st.tucked) {
     st.tucked = tucked;
     island.classList.toggle('tucked', tucked);
     glow.classList.toggle('off', tucked);
     if (tucked && st.hover) { st.hover = false; island.classList.remove('hover'); syncMouse(); }
-    if (!tucked) evalHover(st.cx, st.cy);    // the cursor may already be resting where the pill lands
+    if (tucked) window.qazi.setPillWidth(0);
+    if (!tucked) evalHover(st.cx, st.cy);
   }
 }
 function render() {
@@ -156,8 +163,9 @@ function render() {
   updateTuck();
   if (!st.tucked && st.cx !== undefined) hoverNow();      // the pill may have grown or shrunk under a resting cursor
   island.classList.toggle('dropping', dragging());
+  if (dragging() && cur === 'idle') emote('gulp', 450);
   if (st.tucked) {
-    if (island.dataset.w !== 'tuck') { island.dataset.w = 'tuck'; island.style.width = '56px'; }
+    if (island.dataset.w !== 'tuck') { island.dataset.w = 'tuck'; island.style.width = '56px'; window.qazi.setPillWidth(0); }
     return;
   }
   const v = pickView();
@@ -168,16 +176,17 @@ function render() {
     cur = v;
     if (v === 'tools' && was === 'idle' && st.hover && !st.pillDrag) sfx.tick();
   }
-  const w = clamp(Math.ceil(views[cur].offsetWidth), 70, 600);
-  if (island.dataset.w !== String(w)) {
+  const w = clamp(Math.ceil(views[cur].offsetWidth), 70, 620);
+  if (island.dataset.w !== String(w) || st.tucked === false && island.dataset.w === 'tuck') {
     island.dataset.w = w;
     island.style.width = w + 'px';
     glow.style.width = w + 50 + 'px'; glow.style.marginLeft = -(w + 50) / 2 + 'px';
+    window.qazi.setPillWidth(w);
     if (sideN) placeSide();
   }
 }
 function idleRenderTick() {
-  if (!st.tucked || st.notif || st.hover || st.stackOpen || st.typing || timer.running || st.manual || st.dragOut || Date.now() < Math.max(st.volUntil, st.hudUntil, st.revealUntil, st.holdUntil)) {
+  if (!st.tucked || st.notif || st.hover || st.stackOpen || st.typing || timer.running || st.manual || st.dragOut || st.gamePeek || Date.now() < Math.max(st.volUntil, st.hudUntil, st.revealUntil, st.holdUntil)) {
     render();
   } else {
     updateTuck();
@@ -185,13 +194,32 @@ function idleRenderTick() {
 }
 setInterval(idleRenderTick, 180);
 
-// ------------------------------------------------------------ cursor: hover + click-through
+// ------------------------------------------------------------ cursor: hover + specular rim + shake dizzy + click-through
+let shakeLastX = 0, shakeDir = 0, shakeFlips = 0, shakeFirstT = 0, cursorInsideNear = false;
 window.qazi.onCursor(({ x, y }) => {
   st.cx = x; st.cy = y;
   if (!st.tucked) {
     const r = island.getBoundingClientRect();
-    if (r.width > 10) island.style.setProperty('--mx', clamp(((x - r.left) / r.width) * 100, 0, 100).toFixed(1) + '%');
-  }
+    if (r.width > 10) {
+      island.style.setProperty('--mx', clamp(((x - r.left) / r.width) * 100, 0, 100).toFixed(1) + '%');
+      island.style.setProperty('--my', clamp(((y - r.top) / r.height) * 100, 0, 100).toFixed(1) + '%');
+    }
+    const dx = x - (r.left + r.right) / 2, dy = y - (r.top + r.bottom) / 2;
+    cursorInsideNear = Math.hypot(dx, dy) < 260;
+    if (cur === 'idle' && st.face === 'eyes' && !st.pillDrag && !mergePullActive && Math.hypot(dx, dy) < 170) {
+      const mx = x - shakeLastX;
+      if (Math.abs(mx) > 10) {
+        const s = mx > 0 ? 1 : -1;
+        if (shakeDir && s !== shakeDir) {
+          const now = performance.now();
+          if (now - shakeFirstT > 650) { shakeFlips = 1; shakeFirstT = now; }
+          else shakeFlips++;
+          if (shakeFlips >= 4) { shakeFlips = 0; emote('dizzy', 1400); }
+        }
+        shakeDir = s; shakeLastX = x;
+      }
+    }
+  } else cursorInsideNear = false;
   evalHover(x, y);
 });
 function evalHover(x, y) {
@@ -489,6 +517,7 @@ function renderStack() {
   if (st.stackKind === 'vault') { renderVault(); return; }
   if (st.stackKind === 'settings') { renderSettings(); return; }
   if (st.stackKind === 'speedo') { renderSpeedo(); return; }
+  if (st.stackKind === 'watchdog') { renderWatchdog(); return; }
   if (st.stackKind === 'tour') { renderTour(); return; }
   $('#stack-clear').textContent = 'Clear all';
   $('#stack-clear').classList.toggle('hidden', !st.history.length);
@@ -522,6 +551,7 @@ function setStack(open, kind) {
   if (st.stackOpen && st.stackKind === 'vault') releaseKeys(true);      // leaving the passwords: the keyboard goes back
   if (open && kind === 'vault') { st.vaultQ = ''; st.vaultSel = 0; stackHead.dataset.kind = ''; }
   st.stackOpen = open;
+  window.qazi.setStackOpen(open);
   if (open) st.stackKind = kind;
   stackEl.classList.toggle('open', open);
   $('#t-inbox').classList.toggle('active', open && st.stackKind === 'notifs');
@@ -529,10 +559,15 @@ function setStack(open, kind) {
   $('#t-clips').classList.toggle('active', open && st.stackKind === 'clips');
   $('#t-notes').classList.toggle('active', open && st.stackKind === 'notes');
   $('#t-vault').classList.toggle('active', open && st.stackKind === 'vault');
+  $('#t-watch').classList.toggle('active', open && st.stackKind === 'watchdog');
   $('#t-gear').classList.toggle('active', open && st.stackKind === 'settings');
   $('#t-speedo').classList.toggle('active', open && st.stackKind === 'speedo');
   if (open && kind === 'speedo') loadLocations();
   if (open && kind === 'vault') window.qazi.vaultList().then(setVault);
+  if (open && kind === 'watchdog') {
+    window.qazi.telemetryGet().then((d) => { if (d && d.cpu !== undefined) { st.telem = d; if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog(); } });
+    if (!st.caches) window.qazi.watchdogScan().then((c) => { st.caches = c; if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog(); });
+  }
   island.classList.remove('hover');
   if (open) {
     st.manual = 'tools';
@@ -730,37 +765,119 @@ $('#b-more').addEventListener('click', () => setMenuMode(true));
 $('#t-track').addEventListener('click', () => { setStack(false); setMenuMode(false); });
 setArt(null);
 
-// ------------------------------------------------------------ volume HUD (scroll on the pill, or any system volume change)
+// ------------------------------------------------------------ volume HUD (instant native hover-scroll + fallback wheel)
 function paintVol() {
+  const va = $('#v-app');
+  if (va) va.textContent = st.volApp || '';
   $('#v-fill').style.width = (st.mute ? 0 : st.vol) + '%';
-  $('#v-num').textContent = st.mute ? '0' : st.vol;
+  $('#v-num').textContent = (st.mute ? '0' : st.vol) + (st.volApp ? '%' : '');
   const ic = st.mute || st.vol === 0 ? 'muted' : 'volume';
   setIcon($('#v-icon'), ic);
 }
 views.vol.addEventListener('click', () => { st.volUntil = Date.now() + 1500; window.qazi.toggleMute(); });
-// The pill is the source of truth while scrolling: steps are applied locally at once, sent to Windows at most
-// ~16 times a second, and Windows' own (late) reports are ignored until the wheel has rested.
 let wheelAcc = 0, volSendT = 0;
 island.addEventListener('wheel', (e) => {
   e.preventDefault();
   wheelAcc += e.deltaY;
-  const steps = Math.trunc(wheelAcc / 50);          // one mouse notch = 2%, touchpads glide in 1% steps
+  const steps = Math.trunc(wheelAcc / 50);
   if (!steps) return;
   wheelAcc -= steps * 50;
+  st.volApp = '';
   st.vol = clamp(st.vol - steps, 0, 100); st.mute = false;
   st.volLocalAt = Date.now(); st.volUntil = Date.now() + 1300;
   paintVol(); render();
   if (!volSendT) volSendT = setTimeout(() => { volSendT = 0; window.qazi.setVolume(st.vol / 100); }, 60);
 }, { passive: false });
 
+function updateAgentChip() {
+  const ip = $('#i-pulse'), ac = $('#t-agent');
+  const a = st.agent || { state: 'idle' };
+  const heavy = (st.telem.jobs || []).find((j) => j.hot);
+  if (ip) {
+    ip.className = a.state === 'working' ? 'working' : a.state === 'ready' ? 'ready' : '';
+    ip.title = a.state === 'working' ? `Antigravity working (step ${a.step || '?'})` : a.state === 'ready' ? 'Antigravity ready' : 'Antigravity idle';
+  }
+  if (ac) {
+    if (a.state === 'working') {
+      ac.className = 'agent-chip on working';
+      ac.innerHTML = '<i></i><span>AGY #' + (a.step || '·') + '</span>';
+    } else if (heavy) {
+      ac.className = 'agent-chip on heavy';
+      ac.innerHTML = '<i></i><span>' + heavy.name + ' ' + Math.round(heavy.cpu || 0) + '%</span>';
+    } else if (a.state === 'ready') {
+      ac.className = 'agent-chip on ready';
+      ac.innerHTML = '<i></i><span>AGY</span>';
+    } else {
+      ac.className = 'agent-chip';
+      ac.textContent = '';
+    }
+  }
+}
+const agChip = $('#t-agent');
+if (agChip) agChip.addEventListener('click', (e) => { e.stopPropagation(); sfx.tick(); setStack(!(st.stackOpen && st.stackKind === 'watchdog'), 'watchdog'); });
+
 window.qazi.onHelper((m) => {
   if (m.t === 'media') { if (!st.freezeMedia) onMedia(m); }
   else if (m.t === 'thumb') { if (m.key === st.media.key || !st.media.key) setArt(m.data); }
   else if (m.t === 'notif') onNotif(m);
   else if (m.t === 'notifGone') dropHistory(String(m.id));
-  else if (m.t === 'cover') { st.covered = !!m.covered; st.full = !!m.full; render(); }
+  else if (m.t === 'cover') {
+    st.covered = !!m.covered; st.full = !!m.full; st.game = !!m.game;
+    if (!st.game) st.gamePeek = false;
+    render();
+  }
+  else if (m.t === 'ambient' && Array.isArray(m.rgb)) {
+    const r = document.documentElement.style;
+    r.setProperty('--ch-r', m.rgb[0]); r.setProperty('--ch-g', m.rgb[1]); r.setProperty('--ch-b', m.rgb[2]);
+    r.setProperty('--ch-luma', m.luma || 0.2);
+    document.body.classList.toggle('bright-under', (m.luma || 0) > 0.58);
+  }
+  else if (m.t === 'telemetry') {
+    st.telem = m;
+    st.agent = m.agent || { state: 'idle' };
+    updateAgentChip();
+    const gs = $('#gm-stats');
+    if (gs) {
+      const gp = m.gpuTemp != null ? `GPU ${m.gpuTemp}°C` : `RAM ${m.ramPct}%`;
+      const vr = m.vramTotalMb ? `VRAM ${Math.round((m.vramUsedMb / m.vramTotalMb) * 100)}%` : `${m.ramUsed}G`;
+      gs.textContent = `${gp} · ${vr} · CPU ${m.cpu}%`;
+    }
+    if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog();
+  }
+  else if (m.t === 'agent-done') {
+    st.revealUntil = Math.max(st.revealUntil, Date.now() + 2600);
+    pillGleam(true); spawnEdgeSweep(1.0, false); spawnImpactBloom(0.95, false);
+    if (!st.game) showHud('activity', 'Antigravity', 'پاسخ یا تسک آماده است' + (m.step ? ` (#${m.step})` : ''), 3200, 'green pop');
+    emote('happy', 1100);
+  }
+  else if (m.t === 'heavy-done') {
+    st.revealUntil = Math.max(st.revealUntil, Date.now() + 2600);
+    pillGleam(true); spawnEdgeSweep(0.95, false); spawnImpactBloom(0.9, false);
+    if (!st.game) showHud('activity', 'پایان پردازش سنگین', `${m.name} (${m.secs}s)`, 3400, 'green pop');
+  }
+  else if (m.t === 'persian-res') {
+    if (m.ok) {
+      pillGleam(false); spawnEdgeSweep(0.75, false);
+      showHud('wand', m.mode === 'zwnj' ? 'نیم‌فاصله و حروف مرتب شد' : 'تایپ اصلاح شد', m.preview || '', 2600, 'green pop');
+    } else {
+      showHud('wand', 'اصلاح متن', m.why || 'متنی انتخاب نشده', 2000, 'amber');
+    }
+  }
+  else if (m.t === 'webhook' && m.data) {
+    const d = m.data;
+    st.revealUntil = Math.max(st.revealUntil, Date.now() + 2800);
+    pillGleam(false);
+    const title = d.title || 'Webhook';
+    const text = d.progress !== undefined ? `${d.text || ''} (${d.progress}%)`.trim() : (d.text || '');
+    showHud('activity', title, text, 3000, (d.tone || 'blue') + ' pop');
+  }
+  else if (m.t === 'app-vol') {
+    st.volApp = m.app || 'App'; st.vol = Number(m.pct) || 0; st.mute = st.vol === 0;
+    st.volLocalAt = Date.now(); st.volUntil = Date.now() + 1500;
+    paintVol(); render();
+  }
   else if (m.t === 'bt') {
-    if (!st.deviceAlerts) return;
+    if (!st.deviceAlerts || st.game) return;
     const audio = /bud|pod|head|ear|speaker|sound|audio|jbl|sony|bose|beats|wh-|wf-|anker|jabra/i.test(m.name);
     showHud(audio ? 'headphones' : 'bluetooth', m.name, m.on ? 'Connected' : 'Disconnected', 2600, m.on ? 'blue pop' : 'faded');
   }
@@ -772,22 +889,26 @@ window.qazi.onHelper((m) => {
   else if (m.t === 'updated') showNotif({ app: 'Update', title: 'Peeky was updated to ' + m.version, body: "click to see what's new", action: 'whatsnew', version: m.version, long: true });
   else if (m.t === 'net') {
     const was = st.net; st.net = { online: !!m.online, vpn: m.vpn || '', proxy: !!m.proxy }; paintStatus();
-    if (m.first) return;
+    if (m.first || st.game) return;
     if (was.online !== st.net.online) showHud(st.net.online ? 'wifi' : 'wifioff', 'Internet', st.net.online ? 'Back online' : 'No connection', 2800, st.net.online ? 'green pop' : 'red pop');
     else if (was.vpn !== st.net.vpn) showHud('shield', 'VPN', st.net.vpn ? 'On · ' + st.net.vpn : 'Off', 2600, st.net.vpn ? 'green pop' : 'faded');
     else if (was.proxy !== st.net.proxy) showHud('shield', 'Proxy', st.net.proxy ? 'On' : 'Off', 2200, st.net.proxy ? 'green pop' : 'faded');
   }
   else if (m.t === 'sensors') {
     const was = st.sensors; st.sensors = { mic: m.mic || [], cam: m.cam || [] }; paintStatus();
+    if (st.game) return;
     if (st.sensors.cam.length && !was.cam.length) showHud('cam', 'Camera', 'in use · ' + st.sensors.cam[0], 2600, 'green pop');
     else if (st.sensors.mic.length && !was.mic.length) showHud('mic', 'Microphone', 'in use · ' + st.sensors.mic[0], 2600, 'amber pop');
   }
   else if (m.t === 'vol') {
-    if (Date.now() - st.volLocalAt < 1000) return;       // echo of our own scrolling
+    if (!m.fast && Date.now() - st.volLocalAt < 1000) return;
     const v = Math.round(m.level * 100);
     const changed = v !== st.vol || m.mute !== st.mute;
-    st.vol = v; st.mute = !!m.mute; paintVol();
-    if (st.volSeen && changed && !(st.hideVideo && st.full)) { st.volUntil = Date.now() + 1300; render(); }
+    st.vol = v; st.mute = !!m.mute; st.volApp = ''; paintVol();
+    if ((m.fast || (st.volSeen && changed)) && !(st.game && !st.gamePeek)) {
+      if (m.fast) st.volLocalAt = Date.now();
+      st.volUntil = Date.now() + 1400; render();
+    }
     st.volSeen = true;
   }
 });
@@ -1342,10 +1463,10 @@ const sfx = {
   },
 };
 
-const dragEchoes = [], edgeSweeps = [], slipstreams = [], impactBlooms = [];
+const dragEchoes = [], edgeSweeps = [], slipstreams = [], impactBlooms = [], portalSlits = [];
 let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0, mergePullActive = false, lastTopCleared = false;
 let liveDragMag = 0, liveDragHot = false, liveDragCharge = 0, liveAbsorbing = false, liveAbsorbP = 0, liveDirX = 0, liveDirY = 0, prevMergeHot = false;
-let liveApproachX = -1, prevSnapFlash = 0;
+let liveApproachX = -1;
 let gleamT = 0;
 function hexRgba(col, a) {
   const s = (col || '').trim();
@@ -1357,15 +1478,23 @@ function hexRgba(col, a) {
       return `rgba(${r},${g},${b},${a})`;
     }
   }
-  return `rgba(125,211,252,${a})`;
+  return `rgba(56,189,248,${a})`;
 }
 function themeCols() {
   const stRoot = getComputedStyle(document.documentElement);
-  return {
-    c1: stRoot.getPropertyValue('--c1').trim() || '#38bdf8',
-    c2: stRoot.getPropertyValue('--c2').trim() || '#818cf8',
-    c3: stRoot.getPropertyValue('--c3').trim() || '#e879f9',
-  };
+  const c1 = stRoot.getPropertyValue('--c1').trim();
+  const c2 = stRoot.getPropertyValue('--c2').trim();
+  const c3 = stRoot.getPropertyValue('--c3').trim();
+  // Never allow dark idle #1f0e6b / #33199a default palette to mute foreground optical FX
+  const isMutedDefault = !lookNow || lookNow === 'sky' || c1.toLowerCase() === '#1f0e6b';
+  if (isMutedDefault) {
+    return {
+      c1: stRoot.getPropertyValue('--fx1').trim() || '#38bdf8',
+      c2: stRoot.getPropertyValue('--fx2').trim() || '#818cf8',
+      c3: stRoot.getPropertyValue('--fx3').trim() || '#f472b6',
+    };
+  }
+  return { c1, c2, c3 };
 }
 function pillGleam(mega = false) {
   const cls = mega ? 'gleaming-mega' : 'gleaming';
@@ -1374,16 +1503,27 @@ function pillGleam(mega = false) {
   clearTimeout(gleamT);
   gleamT = setTimeout(() => island.classList.remove('gleaming', 'gleaming-mega'), 720);
 }
+function spawnPortalSlit(dir = 1, isMerge = false) {
+  const cols = themeCols();
+  portalSlits.push({
+    x: FX_W / 2 + (dir >= 0 ? 1 : -1) * Math.min(280, (island.clientWidth || 84) * 0.65 + 48),
+    h: isMerge ? 76 : 58,
+    life: 1,
+    fade: isMerge ? 1.55 : 2.1,
+    c1: cols.c1,
+    c3: cols.c3,
+  });
+}
 function spawnEdgeSweep(power = 0.85, isMerge = false) {
   const cols = themeCols();
   edgeSweeps.push({
     cx: FX_W / 2,
     r: Math.max(22, (island.clientWidth || 84) * 0.42),
-    maxR: isMerge ? 325 : 175 + power * 105,
-    speed: isMerge ? 1850 : 1320 + power * 360,
-    decel: isMerge ? 2.8 : 3.4,
+    maxR: isMerge ? 345 : 220 + power * 115,
+    speed: isMerge ? 2100 : 1520 + power * 420,
+    decel: isMerge ? 2.6 : 3.2,
     life: 1,
-    fade: isMerge ? 1.85 : 2.55,
+    fade: isMerge ? 1.5 : 2.0,
     isMerge,
     c1: cols.c1,
     c3: cols.c3,
@@ -1393,11 +1533,11 @@ function spawnImpactBloom(power = 0.9, isMerge = false) {
   const cols = themeCols();
   impactBlooms.push({
     cx: FX_W / 2,
-    cy: 24,
-    r0: (island.clientWidth || 84) * 0.42,
-    rMax: isMerge ? 255 : 135 + power * 75,
+    cy: 26,
+    r0: (island.clientWidth || 84) * 0.45,
+    rMax: isMerge ? 290 : 165 + power * 85,
     life: 1,
-    fade: isMerge ? 1.75 : 2.5,
+    fade: isMerge ? 1.45 : 2.0,
     isMerge,
     c1: cols.c1,
     c3: cols.c3,
@@ -1405,49 +1545,49 @@ function spawnImpactBloom(power = 0.9, isMerge = false) {
 }
 function pushSlipstream(vx, vy, isMerge) {
   const spd = Math.hypot(vx, vy);
-  if (spd < 5.2 || slipstreams.length >= 18) return;
+  if (spd < 4.5 || slipstreams.length >= 24) return;
   const cols = themeCols();
   const pw = island.clientWidth || 84;
   const nx = -vx / spd, ny = -vy / spd;
-  const sideEdge = (vx >= 0 ? -1 : 1) * (pw * (0.28 + Math.random() * 0.22));
-  const yOff = 12 + Math.random() * 28;
+  const sideEdge = (vx >= 0 ? -1 : 1) * (pw * (0.25 + Math.random() * 0.25));
+  const yOff = 10 + Math.random() * 32;
   slipstreams.push({
     x: FX_W / 2 + sideEdge,
     y: yOff,
     nx,
     ny,
-    len: clamp(spd * 1.45, 22, isMerge ? 92 : 68),
-    curve: (Math.random() - 0.5) * 18,
-    w: isMerge ? 2.1 : 1.5,
+    len: clamp(spd * 1.9, 26, isMerge ? 120 : 88),
+    curve: (Math.random() - 0.5) * 20,
+    w: isMerge ? 2.6 : 1.9,
     life: 1,
-    fade: 4.8 + Math.random() * 2.2,
+    fade: 4.1 + Math.random() * 1.8,
     col: Math.random() > 0.45 ? cols.c3 : cols.c1,
   });
 }
 function pushMotionEcho(vx, vy, isMerge) {
   const spd = Math.hypot(vx, vy);
-  if (spd < 4.5 || dragEchoes.length >= 6) return;
+  if (spd < 4.0 || dragEchoes.length >= 7) return;
   const cols = themeCols();
   const nx = -vx / spd, ny = -vy / spd;
-  const shift = clamp(spd * 0.72, 6, 30);
+  const shift = clamp(spd * 0.85, 8, 36);
   dragEchoes.push({
     dx: nx * shift,
-    dy: ny * shift * 0.62,
+    dy: ny * shift * 0.65,
     w: island.clientWidth || 84,
     life: 1,
-    fade: isMerge ? 6.2 : 7.6,
-    a: isMerge ? 0.34 : clamp(spd * 0.0085, 0.14, 0.28),
+    fade: isMerge ? 5.2 : 6.4,
+    a: isMerge ? 0.46 : clamp(spd * 0.011, 0.20, 0.36),
     col: dragEchoes.length % 2 === 0 ? cols.c1 : cols.c3,
   });
 }
 function drawTopFx(t, dt) {
   const f = fxTopG;
   f.clearRect(0, 0, FX_W, FX_H);
-  if (st.tucked && !mergePullActive && !impactBlooms.length && !edgeSweeps.length) return;
+  if (st.tucked && !mergePullActive && !impactBlooms.length && !edgeSweeps.length && !portalSlits.length) return;
   const cx = FX_W / 2, pw = island.clientWidth || 84;
   const cols = themeCols();
 
-  // 1) Iridescent liquid-glass motion echoes behind fast movement
+  // 1) Ferrofluid translucent chromatic echoes along velocity tail (source-over visible on dark & white backgrounds)
   for (let i = dragEchoes.length - 1; i >= 0; i--) {
     const e = dragEchoes[i];
     e.life -= dt * e.fade;
@@ -1455,9 +1595,11 @@ function drawTopFx(t, dt) {
     const k = clamp(e.life, 0, 1);
     f.save();
     f.globalAlpha = k * k * e.a;
-    f.strokeStyle = hexRgba(e.col, 0.9);
-    f.fillStyle = hexRgba(e.col, 0.18);
-    f.lineWidth = 1.2;
+    f.strokeStyle = hexRgba(e.col, 0.95);
+    f.fillStyle = hexRgba(e.col, 0.24);
+    f.shadowColor = e.col;
+    f.shadowBlur = 10;
+    f.lineWidth = 1.6;
     f.beginPath();
     f.roundRect(cx - e.w / 2 + e.dx, 8 + e.dy, e.w, 36, 18);
     f.fill();
@@ -1465,36 +1607,74 @@ function drawTopFx(t, dt) {
     f.restore();
   }
 
-  f.save();
-  f.globalCompositeOperation = 'lighter';
+  // 2) Live Cursor Specular Brushed-Titanium Micro-Rim (active even at rest when mouse glides near the pill!)
+  if (cursorInsideNear && !st.tucked && st.cx !== undefined && st.cy !== undefined) {
+    const rect = island.getBoundingClientRect();
+    const lcX = clamp(st.cx - rect.left + (cx - pw / 2), cx - pw * 0.56, cx + pw * 0.56);
+    const lcY = clamp(st.cy - rect.top + 8, 6, 46);
+    const rg = f.createRadialGradient(lcX, lcY, 2, lcX, lcY, Math.max(46, pw * 0.42));
+    rg.addColorStop(0, 'rgba(255, 255, 255, 0.88)');
+    rg.addColorStop(0.35, hexRgba(cols.c1, 0.62));
+    rg.addColorStop(0.75, hexRgba(cols.c3, 0.24));
+    rg.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    f.save();
+    f.strokeStyle = rg;
+    f.lineWidth = 1.8;
+    f.beginPath(); f.roundRect(cx - pw / 2, 8, pw, 36, 18); f.stroke();
+    f.restore();
+  }
 
-  // 2) Aerodynamic chromatic slipstream ribbons
+  // 3) Bezel Portal Vertical Chromatic Slits on monitor transitions & magnetic merge
+  for (let i = portalSlits.length - 1; i >= 0; i--) {
+    const p = portalSlits[i];
+    p.life -= dt * p.fade;
+    if (p.life <= 0) { portalSlits.splice(i, 1); continue; }
+    const k = Math.pow(clamp(p.life, 0, 1), 1.2);
+    const y0 = 26 - p.h * 0.5 * k, y1 = 26 + p.h * 0.5 * k;
+    const g = f.createLinearGradient(p.x, y0, p.x, y1);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.3, hexRgba(p.c1, 0.92));
+    g.addColorStop(0.5, '#ffffff');
+    g.addColorStop(0.7, hexRgba(p.c3, 0.92));
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    f.save();
+    f.globalAlpha = k;
+    f.strokeStyle = g;
+    f.shadowColor = p.c1;
+    f.shadowBlur = 18;
+    f.lineWidth = 3.2 * k;
+    f.lineCap = 'round';
+    f.beginPath(); f.moveTo(p.x, y0); f.lineTo(p.x, y1); f.stroke();
+    f.restore();
+  }
+
+  // 4) Chromatic aerodynamic slipstream ribbons (crisp source-over core + radiant shadow)
   for (let i = slipstreams.length - 1; i >= 0; i--) {
     const s = slipstreams[i];
     s.life -= dt * s.fade;
-    s.x += s.nx * 90 * dt;
-    s.y += s.ny * 55 * dt;
+    s.x += s.nx * 105 * dt;
+    s.y += s.ny * 65 * dt;
     if (s.life <= 0) { slipstreams.splice(i, 1); continue; }
     const k = clamp(s.life, 0, 1);
-    const x2 = s.x + s.nx * s.len * (1.2 - k * 0.25);
-    const y2 = s.y + s.ny * s.len * 0.72 * (1.2 - k * 0.25);
+    const x2 = s.x + s.nx * s.len * (1.25 - k * 0.25);
+    const y2 = s.y + s.ny * s.len * 0.72 * (1.25 - k * 0.25);
     const mx = (s.x + x2) * 0.5, my = (s.y + y2) * 0.5 + s.curve * (1 - k);
     const g = f.createLinearGradient(s.x, s.y, x2, y2);
     g.addColorStop(0, '#ffffff');
-    g.addColorStop(0.32, hexRgba(s.col, 0.85));
+    g.addColorStop(0.38, hexRgba(s.col, 0.95));
     g.addColorStop(1, hexRgba(s.col, 0));
     f.save();
-    f.globalAlpha = k * 0.85;
+    f.globalAlpha = k * 0.94;
     f.strokeStyle = g;
     f.shadowColor = s.col;
-    f.shadowBlur = 7;
-    f.lineWidth = s.w * k;
+    f.shadowBlur = 10;
+    f.lineWidth = s.w * (0.4 + k * 0.6);
     f.lineCap = 'round';
     f.beginPath(); f.moveTo(s.x, s.y); f.quadraticCurveTo(mx, my, x2, y2); f.stroke();
     f.restore();
   }
 
-  // 3) Soft Aurora Impact Bloom + horizontal optical streak on lock / switch / merge
+  // 5) Soft Aurora Impact Bloom + optical lens halo (layered source-over + additive burst)
   for (let i = impactBlooms.length - 1; i >= 0; i--) {
     const b = impactBlooms[i];
     b.life -= dt * b.fade;
@@ -1502,131 +1682,116 @@ function drawTopFx(t, dt) {
     const p = 1 - clamp(b.life, 0, 1);
     const ease = 1 - Math.pow(1 - p, 3);
     const r = b.r0 + (b.rMax - b.r0) * ease;
-    const alpha = Math.pow(clamp(b.life, 0, 1), 1.45);
-    const rg = f.createRadialGradient(b.cx, b.cy, 4, b.cx, b.cy, r);
-    rg.addColorStop(0, `rgba(255,255,255,${(alpha * (b.isMerge ? 0.48 : 0.34)).toFixed(3)})`);
-    rg.addColorStop(0.28, hexRgba(b.c3, (alpha * (b.isMerge ? 0.56 : 0.42)).toFixed(3)));
-    rg.addColorStop(0.62, hexRgba(b.c1, (alpha * (b.isMerge ? 0.36 : 0.24)).toFixed(3)));
+    const alpha = Math.pow(clamp(b.life, 0, 1), 1.25);
+    const rg = f.createRadialGradient(b.cx, b.cy, 6, b.cx, b.cy, r);
+    rg.addColorStop(0, `rgba(255,255,255,${(alpha * (b.isMerge ? 0.62 : 0.44)).toFixed(3)})`);
+    rg.addColorStop(0.28, hexRgba(b.c3, (alpha * (b.isMerge ? 0.72 : 0.54)).toFixed(3)));
+    rg.addColorStop(0.62, hexRgba(b.c1, (alpha * (b.isMerge ? 0.45 : 0.34)).toFixed(3)));
     rg.addColorStop(1, 'rgba(0,0,0,0)');
     f.save();
     f.fillStyle = rg;
-    f.beginPath(); f.ellipse(b.cx, b.cy, r * 1.18, r * 0.44, 0, 0, Math.PI * 2); f.fill();
+    f.beginPath(); f.ellipse(b.cx, b.cy, r * 1.28, r * 0.48, 0, 0, Math.PI * 2); f.fill();
     f.restore();
   }
 
-  // 4) Continuous rotating Apple-Intelligence iridescent rim + directional specular hot-spot
-  const rimAmp = liveAbsorbing ? 0.95 : mergePullActive ? clamp(0.45 + liveDragCharge * 0.55, 0.42, 0.96) : st.pillDrag ? clamp(0.38 + liveDragMag * 0.58, 0.36, 0.94) : 0;
+  // 6) Continuous rotating Apple-Intelligence iridescent rim during drag / spring / merge
+  const rimAmp = liveAbsorbing ? 1.0 : mergePullActive ? clamp(0.55 + liveDragCharge * 0.45, 0.52, 1.0) : st.pillDrag ? clamp(0.5 + liveDragMag * 0.5, 0.48, 0.98) : 0;
   if (rimAmp > 0.05) {
     const sc = liveAbsorbing ? clamp(1 - liveAbsorbP * 0.74, 0.2, 1) : 1;
-    const rw = (pw + 2) * sc, rh = 36 * sc;
-    const rx = cx - rw / 2, ry = 8 + (36 - rh) / 2;
+    const rw = (pw + 3) * sc, rh = 38 * sc;
+    const rx = cx - rw / 2, ry = 7 + (36 - rh * (36 / 38)) / 2;
     let rimGrad;
     if (typeof f.createConicGradient === 'function') {
-      rimGrad = f.createConicGradient(t * 2.8, cx, ry + rh * 0.5);
+      rimGrad = f.createConicGradient(t * 0.004, cx, ry + rh * 0.5);
       rimGrad.addColorStop(0, cols.c1);
-      rimGrad.addColorStop(0.24, cols.c3);
-      rimGrad.addColorStop(0.48, '#ffffff');
-      rimGrad.addColorStop(0.72, '#60a5fa');
-      rimGrad.addColorStop(0.88, '#f472b6');
+      rimGrad.addColorStop(0.22, cols.c3);
+      rimGrad.addColorStop(0.45, '#ffffff');
+      rimGrad.addColorStop(0.68, '#38bdf8');
+      rimGrad.addColorStop(0.86, '#f472b6');
       rimGrad.addColorStop(1, cols.c1);
     } else {
       rimGrad = f.createLinearGradient(rx, ry, rx + rw, ry + rh);
-      rimGrad.addColorStop(0, cols.c1);
-      rimGrad.addColorStop(0.5, '#ffffff');
-      rimGrad.addColorStop(1, cols.c3);
+      rimGrad.addColorStop(0, cols.c1); rimGrad.addColorStop(0.5, '#ffffff'); rimGrad.addColorStop(1, cols.c3);
     }
     f.save();
-    f.globalAlpha = rimAmp * (liveDragHot || liveAbsorbing ? 0.92 : 0.76);
+    f.globalAlpha = rimAmp;
     f.strokeStyle = rimGrad;
     f.shadowColor = cols.c3;
-    f.shadowBlur = liveDragHot || liveAbsorbing ? 15 : 10;
-    f.lineWidth = liveDragHot || liveAbsorbing ? 2.2 : 1.75;
-    f.beginPath(); f.roundRect(rx, ry, rw, rh, 18 * sc); f.stroke();
-    f.restore();
-
-    const focusX = clamp(cx + liveDirX * (rw * 0.42), rx, rx + rw);
-    const focusY = clamp(ry + rh * 0.5 + liveDirY * 14, ry, ry + rh);
-    const rg = f.createRadialGradient(focusX, focusY, 2, focusX, focusY, rw * 0.58);
-    rg.addColorStop(0, `rgba(255, 255, 255, ${(rimAmp * 0.92).toFixed(3)})`);
-    rg.addColorStop(0.45, hexRgba(cols.c1, (rimAmp * 0.45).toFixed(3)));
-    rg.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    f.save();
-    f.strokeStyle = rg;
-    f.lineWidth = 1.6;
-    f.beginPath(); f.roundRect(rx, ry, rw, rh, 18 * sc); f.stroke();
+    f.shadowBlur = liveDragHot || liveAbsorbing ? 18 : 12;
+    f.lineWidth = liveDragHot || liveAbsorbing ? 2.8 : 2.2;
+    f.beginPath(); f.roundRect(rx, ry, rw, rh, 19 * sc); f.stroke();
     f.restore();
   }
 
-  // 5) Smooth curved magnetic attraction filaments when merging secondary -> main
-  if (mergePullActive && liveDragCharge > 0.08) {
+  // 7) Curved magnetic energy filaments pulling secondary -> main
+  if (mergePullActive && liveDragCharge > 0.06) {
     const dir = liveApproachX !== 0 ? (liveApproachX > 0 ? 1 : -1) : -1;
     const edgeX = cx + dir * (pw * 0.48);
-    const farX = edgeX + dir * (58 + liveDragCharge * 64);
-    for (let k = 0; k < 4; k++) {
-      const sy = 14 + k * 8;
-      const ey = 26 + (k - 1.5) * 3.5;
-      const sway = Math.sin(t * 9 + k * 1.9) * (6 + liveDragCharge * 6);
+    const farX = edgeX + dir * (74 + liveDragCharge * 84);
+    for (let k = 0; k < 5; k++) {
+      const sy = 12 + k * 7;
+      const ey = 26 + (k - 2) * 3.2;
+      const sway = Math.sin(t * 0.011 + k * 1.7) * (7 + liveDragCharge * 7);
       const fg = f.createLinearGradient(farX, sy + sway, edgeX, ey);
       fg.addColorStop(0, 'rgba(255,255,255,0)');
-      fg.addColorStop(0.55, hexRgba(k % 2 ? cols.c3 : cols.c1, 0.8));
+      fg.addColorStop(0.45, hexRgba(k % 2 ? cols.c3 : cols.c1, 0.92));
       fg.addColorStop(1, '#ffffff');
       f.save();
-      f.globalAlpha = clamp(liveDragCharge * 0.92, 0.25, 0.92);
+      f.globalAlpha = clamp(0.45 + liveDragCharge * 0.55, 0.4, 1);
       f.strokeStyle = fg;
-      f.shadowColor = cols.c3;
-      f.shadowBlur = 9;
-      f.lineWidth = 1.4 + liveDragCharge * 0.7;
+      f.shadowColor = cols.c1;
+      f.shadowBlur = 11;
+      f.lineWidth = 1.8 + liveDragCharge * 0.9;
       f.lineCap = 'round';
       f.beginPath();
-      f.moveTo(farX, sy + sway * 1.4);
-      f.quadraticCurveTo((farX + edgeX) * 0.52, (sy + ey) * 0.5 - sway * 0.8, edgeX, ey);
+      f.moveTo(farX, sy + sway * 1.3);
+      f.quadraticCurveTo((farX + edgeX) * 0.52, (sy + ey) * 0.5 - sway * 0.85, edgeX, ey);
       f.stroke();
       f.restore();
     }
   }
 
-  // 6) Decelerating multi-band chromatic horizon light wave along top monitor bezel
+  // 8) Decelerating wide chromatic top-bezel wave (visible clearly on dark & light windows)
   for (let i = edgeSweeps.length - 1; i >= 0; i--) {
     const wv = edgeSweeps[i];
     wv.r += wv.speed * dt;
     wv.speed *= Math.exp(-wv.decel * dt);
     wv.life -= dt * wv.fade;
     if (wv.life <= 0 || wv.r > wv.maxR) { edgeSweeps.splice(i, 1); continue; }
-    const a = Math.pow(clamp(wv.life, 0, 1), 1.15);
-    const len = Math.min(115, wv.r * 0.58);
+    const a = Math.pow(clamp(wv.life, 0, 1), 1.1);
+    const len = Math.min(145, wv.r * 0.62);
     const yBeam = 8.5;
     for (const dir of [-1, 1]) {
       const tip = wv.cx + dir * wv.r;
       const tail = wv.cx + dir * Math.max(0, wv.r - len);
       const mist = f.createLinearGradient(tail, yBeam, tip, yBeam);
       mist.addColorStop(0, 'rgba(0,0,0,0)');
-      mist.addColorStop(0.42, hexRgba(wv.c1, 0.72));
-      mist.addColorStop(0.82, hexRgba(wv.c3, 0.92));
+      mist.addColorStop(0.35, hexRgba(wv.c1, 0.88));
+      mist.addColorStop(0.78, hexRgba(wv.c3, 0.96));
       mist.addColorStop(1, '#ffffff');
       f.save();
-      f.globalAlpha = a * (wv.isMerge ? 0.86 : 0.72);
+      f.globalAlpha = a * (wv.isMerge ? 0.96 : 0.86);
       f.strokeStyle = mist;
       f.shadowColor = wv.c3;
-      f.shadowBlur = wv.isMerge ? 14 : 10;
-      f.lineWidth = wv.isMerge ? 3.8 : 2.8;
+      f.shadowBlur = wv.isMerge ? 18 : 13;
+      f.lineWidth = wv.isMerge ? 4.8 : 3.6;
       f.lineCap = 'round';
       f.beginPath(); f.moveTo(tail, yBeam); f.lineTo(tip, yBeam); f.stroke();
 
       f.shadowColor = '#ffffff';
-      f.shadowBlur = 5;
-      f.strokeStyle = mist;
-      f.lineWidth = wv.isMerge ? 1.6 : 1.3;
-      f.beginPath(); f.moveTo(tail + dir * len * 0.35, yBeam); f.lineTo(tip, yBeam); f.stroke();
+      f.shadowBlur = 7;
+      f.strokeStyle = '#ffffff';
+      f.lineWidth = wv.isMerge ? 2.0 : 1.6;
+      f.beginPath(); f.moveTo(tail + dir * len * 0.45, yBeam); f.lineTo(tip, yBeam); f.stroke();
       f.restore();
     }
   }
-  f.restore();
 }
 let idleFrames = 0, lastT = 0, lastPaint = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const playing = st.media.playing && musicOn();
-  const hasTopFx = !!(dragEchoes.length || edgeSweeps.length || slipstreams.length || impactBlooms.length || st.pillDrag || mergePullActive);
+  const hasTopFx = !!(dragEchoes.length || edgeSweeps.length || slipstreams.length || impactBlooms.length || portalSlits.length || st.pillDrag || mergePullActive || cursorInsideNear);
   const look = st.skin !== 'black' ? st.skin : playing && st.visuals && st.react ? 'sky' : null;
   if (look !== lookNow) {
     if (look && lookNow) skyA = Math.min(skyA, 0.2);
@@ -1824,8 +1989,127 @@ $$('[data-act]').forEach((b) => b.addEventListener('click', async () => {
   if (a === 'vault') { setStack(!(st.stackOpen && st.stackKind === 'vault'), 'vault'); return; }
   if (a === 'clips') { setStack(!(st.stackOpen && st.stackKind === 'clips'), 'clips'); return; }
   if (a === 'speedo') { setStack(!(st.stackOpen && st.stackKind === 'speedo'), 'speedo'); return; }
+  if (a === 'watchdog') { setStack(!(st.stackOpen && st.stackKind === 'watchdog'), 'watchdog'); return; }
   window.qazi.action(a);
 }));
+
+// Offline Procedural Deep-Work Ambient Soundscape (Zero external assets; soft lowpassed Brown / Warm Rain)
+let ambNode = null, ambGain = null;
+function setAmbientSound(mode) {
+  st.ambientMode = mode;
+  if (ambNode) { try { ambNode.stop(); ambNode.disconnect(); } catch {} ambNode = null; }
+  if (ambGain) { try { ambGain.disconnect(); } catch {} ambGain = null; }
+  if (mode === 'off') { if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog(); return; }
+  st.soundFx = true;
+  const c = ensureAudio();
+  if (!c) return;
+  try {
+    const len = c.sampleRate * 3;
+    const buf = c.createBuffer(1, len, c.sampleRate);
+    const ch = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      if (mode === 'brown') { last = (last + 0.025 * w) / 1.025; ch[i] = last * 3.4; }
+      else { last = last * 0.72 + w * 0.28; ch[i] = last * 0.55; }
+    }
+    const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = mode === 'brown' ? 320 : 1850;
+    const g = c.createGain(); g.gain.value = mode === 'brown' ? 0.14 : 0.09;
+    src.connect(lp); lp.connect(g); g.connect(c.destination); src.start();
+    ambNode = src; ambGain = g;
+  } catch {}
+  if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog();
+}
+
+function renderWatchdog() {
+  if (!st.stackOpen || st.stackKind !== 'watchdog') return;
+  $('#stack-clear').classList.add('hidden');
+  const prevScroll = stackList.scrollTop;
+  stackList.textContent = '';
+  const m = st.telem || {};
+
+  // 1) Live CPU / RAM / GPU vitals bar
+  const top = document.createElement('div'); top.className = 'row wd';
+  const gpuTxt = m.gpuTemp != null ? `GPU ${m.gpuTemp}°C (${m.gpuUtil ?? 0}% · ${m.vramUsedMb ?? 0}MB)` : 'GPU N/A';
+  const lbl = document.createElement('span'); lbl.className = 'lbl';
+  lbl.textContent = `CPU ${m.cpu ?? 0}% · RAM ${m.ramUsed ?? 0}/${m.ramTotal ?? 0}GB · ${gpuTxt}`;
+  const met = document.createElement('span'); met.className = 'meter';
+  const mf = document.createElement('i'); mf.style.width = clamp(Number(m.cpu) || 0, 4, 100) + '%';
+  met.appendChild(mf); top.append(lbl, met);
+  stackList.appendChild(top);
+
+  // 2) Antigravity Agent Pulse status + Focus Soundscape toggle
+  const ag = document.createElement('div'); ag.className = 'row wd-head';
+  const a = m.agent || st.agent || { state: 'idle' };
+  const al = document.createElement('span'); al.className = 'lbl';
+  al.textContent = a.state === 'working' ? `Antigravity: در حال پردازش (#${a.step || '?'})` : a.state === 'ready' ? `Antigravity: آماده (#${a.step || '✓'})` : 'Antigravity: آماده / بی‌کار';
+  const ambSeg = document.createElement('div'); ambSeg.className = 'seg';
+  for (const [val, txt] of [['off', 'Silence'], ['brown', 'Brown'], ['rain', 'Rain']]) {
+    const bt = document.createElement('button'); bt.textContent = txt;
+    if (st.ambientMode === val) bt.className = 'on';
+    bt.addEventListener('click', () => { sfx.tick(); setAmbientSound(val); });
+    ambSeg.appendChild(bt);
+  }
+  ag.append(al, ambSeg); stackList.appendChild(ag);
+
+  // 3) Persian 1-click Tools (En<->Fa Rescue & ZWNJ Polisher on latest copied text, plus hotkey reminder)
+  const faRow = document.createElement('div'); faRow.className = 'row wd-head';
+  const fl = document.createElement('span'); fl.className = 'lbl'; fl.textContent = 'ابزار فوری متن (Ctrl+Alt+F · Ctrl+Alt+Z)';
+  const b1 = document.createElement('button'); b1.className = 'go'; b1.textContent = 'En↔Fa';
+  b1.title = 'تبدیل تایپ اشتباه آخرین متن کلیپ‌بورد';
+  b1.addEventListener('click', async () => {
+    const txt = (st.clips[0] && st.clips[0].preview) || '';
+    if (!txt) { flash('کلیپ‌بورد متنی ندارد'); return; }
+    const res = await window.qazi.persianFix('layout', txt);
+    window.qazi.copy(res.text || txt); flash('کپی شد: ' + (res.text || '').slice(0, 28));
+  });
+  const b2 = document.createElement('button'); b2.className = 'go'; b2.textContent = 'نیم‌فاصله';
+  b2.title = 'اصلاح نیم‌فاصله و حروف عربی آخرین متن کلیپ‌بورد';
+  b2.addEventListener('click', async () => {
+    const txt = (st.clips[0] && st.clips[0].preview) || '';
+    if (!txt) { flash('کلیپ‌بورد متنی ندارد'); return; }
+    const res = await window.qazi.persianFix('zwnj', txt);
+    window.qazi.copy(res.text || txt); flash('متن اصلاح و کپی شد');
+  });
+  faRow.append(fl, b1, b2); stackList.appendChild(faRow);
+
+  // 4) Heavy / Render / Build Processes (with 1-click Kill)
+  const jobs = Array.isArray(m.jobs) ? m.jobs : [];
+  if (jobs.length) {
+    jobs.slice(0, 4).forEach((j) => {
+      const jr = document.createElement('div'); jr.className = 'row wd';
+      const jl = document.createElement('span'); jl.className = 'lbl';
+      jl.textContent = `${j.name} · CPU ${j.cpu}% · IO ${j.io}MB/s`;
+      const jb = document.createElement('button'); jb.className = 'go danger'; jb.textContent = 'Kill';
+      jb.addEventListener('click', async () => {
+        if (await window.qazi.watchdogKill(j.pid)) { flash(j.name + ' بسته شد'); }
+      });
+      jr.append(jl, jb); stackList.appendChild(jr);
+    });
+  } else {
+    const nj = document.createElement('div'); nj.className = 'row wd';
+    nj.innerHTML = '<span class="lbl dim">پردازش سنگین رندر یا بیلد فعال نیست</span>';
+    stackList.appendChild(nj);
+  }
+
+  // 5) Cache & Temp Watch + 1-click Purge Temp
+  const caches = Array.isArray(st.caches) ? st.caches : [];
+  const cr = document.createElement('div'); cr.className = 'row wd-head';
+  const cl = document.createElement('span'); cl.className = 'lbl';
+  cl.textContent = caches.length ? caches.map((c) => `${c.name.split(' ')[0]} ${c.mb}MB`).join(' · ') : 'در حال اسکن کش و Temp…';
+  const cb1 = document.createElement('button'); cb1.className = 'go'; cb1.textContent = 'اسکن';
+  cb1.addEventListener('click', async () => { cl.textContent = 'اسکن…'; st.caches = await window.qazi.watchdogScan(); renderWatchdog(); });
+  const cb2 = document.createElement('button'); cb2.className = 'go'; cb2.textContent = 'پاک‌سازی Temp';
+  cb2.addEventListener('click', async () => {
+    const r = await window.qazi.watchdogClean();
+    st.caches = await window.qazi.watchdogScan();
+    flash(r.ok ? `${r.freedMb} MB پاک شد` : 'پاک‌سازی انجام شد');
+    renderWatchdog();
+  });
+  cr.append(cl, cb1, cb2); stackList.appendChild(cr);
+  stackList.scrollTop = prevScroll;
+}
 
 // ------------------------------------------------------------ timer
 function beep() {
@@ -2295,6 +2579,11 @@ const SETTINGS_UI = [
   ['toggle', 'dualMonitors', 'Show on both monitors'],
   ['toggle', 'secondaryAlwaysOpen', 'Keep open on 2nd monitor'],
   ['toggle', 'soundFx', 'Sound effects'],
+  ['toggle', 'chameleonGlass', 'Adaptive chameleon glass tint'],
+  ['toggle', 'gameStealth', 'Smart fullscreen game stealth (Ctrl+Alt+G peek)'],
+  ['toggle', 'agentPulse', 'Antigravity Agent pulse'],
+  ['toggle', 'watchdogAlerts', 'Heavy render / build completion alerts'],
+  ['toggle', 'persianHotkeys', 'Ctrl+Alt+F layout rescue · Ctrl+Alt+Z ZWNJ polish'],
   ['swatch', 'skin', 'Theme', ['black', 'nebula', 'crystal', 'ember', 'reactor', 'venom']],        // cloud, water, lava and ice are parked until they are finished
   ['toggle', 'musicReact', 'Theme reacts to music'],
   ['toggle', 'visuals', 'Night sky with music (black theme)'],
@@ -2388,6 +2677,8 @@ const TOUR = [
   ['clipboard', 'Clipboard history', 'Everything you copied, with images and pins', 'clips'],
   ['key', 'Passwords', 'Makes one, asks what it is for, keeps it encrypted', 'vault'],
   ['timer', 'Timer', 'Stays in sight while it runs', 'timer'],
+  ['activity', 'Watchdog & Antigravity', 'CPU/GPU thermals, heavy renders, temp purge & agent pulse', 'watchdog'],
+  ['wand', 'Persian rescue & ZWNJ', 'Fix mistyped En↔Fa layout or clean half-spaces in place', 'watchdog', 'Ctrl Alt F / Z'],
   ['gear', 'Themes and settings', 'Liquid skins, Venom, and every switch', 'settings'],
 ];
 function renderTour() {
@@ -2414,9 +2705,15 @@ window.qazi.onOpen((what) => {
   st.holdUntil = Date.now() + 9000; st.revealUntil = Date.now() + 9000;
   setStack(true, what === 'settings' ? 'settings' : st.stackKind);
 });
-window.qazi.onHotkey((what) => { if (what === 'note' && !st.typing) { st.holdUntil = Date.now() + 1500; quickNote(); } });
+window.qazi.onHotkey((what) => {
+  if (what === 'note' && !st.typing) { st.holdUntil = Date.now() + 1500; quickNote(); }
+  else if (what === 'game-peek') {
+    if (st.game) { st.gamePeek = !st.gamePeek; st.revealUntil = Date.now() + 4500; render(); }
+    else { st.holdUntil = Date.now() + 3000; setStack(!(st.stackOpen && st.stackKind === 'watchdog'), 'watchdog'); }
+  }
+});
 
-// ------------------------------------------------------------ the face & living idle island behaviors
+// ------------------------------------------------------------ the face & living bio-companion behaviors
 const face = $('#i-face');
 let emoteT = 0, hopT = 0;
 function emote(name, ms) {
@@ -2433,9 +2730,13 @@ const blink = () => emote('blink', 120);
 (function faceLoop() {
   if (cur === 'idle' && !st.tucked && st.face === 'eyes' && !face.className && !st.pillDrag && !mergePullActive) {
     const r = Math.random(), night = new Date().getHours() < 6;
-    if (night && r < 0.42) emote('sleepy', 2900);
-    else if (r < 0.36) blink();
-    else if (r < 0.50) { blink(); setTimeout(() => { blink(); pillHop(); }, 230); }
+    const cpuHot = (st.telem.gpuTemp || 0) >= 82 || (st.telem.cpu || 0) >= 88;
+    if (!st.net.online) { emote('confused', 2200); }
+    else if (cpuHot) { emote('hot', 2100); }
+    else if (st.agent && st.agent.state === 'working' && r < 0.72) { emote('agent', 1900); }
+    else if (night && r < 0.42) emote('sleepy', 2900);
+    else if (r < 0.34) blink();
+    else if (r < 0.48) { blink(); setTimeout(() => { blink(); pillHop(); }, 230); }
     else if (r < 0.62) { emote('curious', 1500); }
     else if (r < 0.74) { emote('radar', 1350); face.style.setProperty('--lx', '-2.8px'); setTimeout(() => { if (face.className === 'radar') face.style.setProperty('--lx', '2.8px'); }, 450); pillGleam(false); }
     else if (r < 0.85) { emote('happy', 1100); pillHop(); }
@@ -2443,19 +2744,20 @@ const blink = () => emote('blink', 120);
     else if (r < 0.97) { emote('look-l', 500); setTimeout(() => emote('look-r', 500), 540); }
     else { emote('shock', 450); setTimeout(blink, 480); }
   }
-  setTimeout(faceLoop, 1500 + Math.random() * 3000);
+  setTimeout(faceLoop, 1500 + Math.random() * 2800);
 })();
 // Periodic subtle glass gleam across the smoked surface while idle
 (function idleVibeLoop() {
   if (!st.tucked && !st.pillDrag && !mergePullActive && Math.random() < 0.72) pillGleam(false);
   setTimeout(idleVibeLoop, 11000 + Math.random() * 9000);
 })();
-// the eyes follow the cursor a little when it comes near
+// the eyes follow the cursor (and softly glance toward the 2nd monitor when cursor leaves bounds)
 window.qazi.onCursor(({ x, y }) => {
   if (st.pillDrag || mergePullActive) return;
   const dx = x - window.innerWidth / 2, dy = y - 26, d = Math.hypot(dx, dy);
   const k = d < 420 && d > 1 ? Math.min(1, d / 120) : 0;
-  face.style.setProperty('--lx', (k ? dx / d * 2.4 * k : 0).toFixed(2) + 'px');
+  const edgeBias = (st.dualMonitors && Math.abs(dx) > 320) ? Math.sign(dx) * 1.8 : 0;
+  face.style.setProperty('--lx', (k ? dx / d * 2.4 * k : edgeBias).toFixed(2) + 'px');
   face.style.setProperty('--ly', (k ? dy / d * 1.6 * k : 0).toFixed(2) + 'px');
 });
 
@@ -2474,6 +2776,12 @@ const applySettings = (s) => {
   st.smartCopy = s.smartCopy !== false;
   st.react = s.musicReact !== false;
   st.soundFx = s.soundFx !== false;
+  st.gameStealth = s.gameStealth !== false;
+  st.agentPulse = s.agentPulse !== false;
+  st.watchdogAlerts = s.watchdogAlerts !== false;
+  st.chameleonGlass = s.chameleonGlass !== false;
+  st.persianHotkeys = s.persianHotkeys !== false;
+  if (!st.chameleonGlass) { document.body.classList.remove('bright-under'); document.documentElement.style.setProperty('--ch-r', '18'); document.documentElement.style.setProperty('--ch-g', '24'); document.documentElement.style.setProperty('--ch-b', '42'); }
   if (s.netAlerts === false) { st.net = { online: true, vpn: '', proxy: false }; paintStatus(); }
   st.calendar = CALENDARS.includes(s.calendar) ? s.calendar : 'gregorian';
   st.face = s.face === 'clock' ? 'clock' : 'eyes';
@@ -2564,6 +2872,18 @@ function smart(raw) {
     if (v === null) return null;
     const out = String(Math.round(v * 1e8) / 1e8);
     return { icon: 'calc', title: '= ' + Number(out).toLocaleString('en', { maximumFractionDigits: 8 }), text: 'click to copy', act: copyIt(out) };
+  }
+  // Persian messy orthography / missing half-space (ZWNJ) smart-fix chip
+  if (/[\u064A\u0643\u0649\u0629]/.test(t) || /(^|\s)(می|نمی)\s+[\u0621-\u06CC]{2,}/.test(t) || /[\u0621-\u06CC]{2,}\s+(ها|های|تر|ترین)(\s|$)/.test(t)) {
+    return { icon: 'wand', title: 'اصلاح نگارش فارسی', text: 'کلیک برای کپی با نیم‌فاصله و ی/ک صحیح', tone: 'blue pop', act: async () => { const res = await window.qazi.persianFix('zwnj', raw); window.qazi.copy(res.text || raw); flash('اصلاح و کپی شد'); } };
+  }
+  // Accidental QWERTY-typed Persian (e.g. "sghl o,fd") -> instant 1-click rescue
+  const qwMap = { q:'ض',w:'ص',e:'ث',r:'ق',t:'ف',y:'غ',u:'ع',i:'ه',o:'خ',p:'ح','[':'ج',']':'چ',a:'ش',s:'س',d:'ی',f:'ب',g:'ل',h:'ا',j:'ت',k:'ن',l:'م',';':'ک',"'":'گ',z:'ظ',x:'ط',c:'ز',v:'ر',b:'ذ',n:'د',m:'پ',',':'و',H:'آ' };
+  if (/^[A-Za-z,;'\[\].? ]{4,80}$/.test(t) && /[,;'\[\]]/.test(t) && !/\b(the|and|for|with|http|var|const|let)\b/i.test(t)) {
+    const conv = t.replace(/./g, (ch) => qwMap[ch] || ch);
+    if (/[\u0621-\u06CC]{3,}/.test(conv)) {
+      return { icon: 'wand', title: conv.slice(0, 34), text: 'کلیک برای کپی متن فارسی', tone: 'green pop', act: copyIt(conv) };
+    }
   }
   return null;
 }
@@ -2698,6 +3018,7 @@ window.qazi.onPillLanded((p) => {
   if ((p && p.switched) || imp > 0.25) {
     spawnEdgeSweep(imp, false);
     spawnImpactBloom(imp, false);
+    if (p && p.switched) spawnPortalSlit(1, false);
   }
   if ((p && p.switched) || imp > 0.52) emote('happy', 750);
   clearTimeout(dragGlowT);
@@ -2760,6 +3081,7 @@ window.qazi.onMergeComplete((p) => {
   sfx.merge();
   spawnEdgeSweep(imp, true);
   spawnImpactBloom(imp, true);
+  spawnPortalSlit(-1, true); spawnPortalSlit(1, true);
   emote('happy', 1000);
   clearTimeout(dragGlowT);
   dragGlowActive = true;

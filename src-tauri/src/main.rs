@@ -8,12 +8,14 @@ mod media;
 mod net;
 mod ocr;
 mod notif;
+mod persian;
 mod poll;
 mod settings;
 mod shelf;
 mod speedo;
 mod store;
 mod sys;
+mod telemetry;
 mod update;
 
 use std::io::Write;
@@ -32,6 +34,40 @@ use poll::Cmd;
 #[tauri::command]
 fn set_interactive(window: tauri::WebviewWindow, on: bool) {
     hit::set_interactive(window.label(), on)
+}
+#[tauri::command]
+fn set_pill_width(window: tauri::WebviewWindow, w: f64) {
+    hit::set_pill_width(window.label(), w)
+}
+#[tauri::command]
+fn set_stack_open(window: tauri::WebviewWindow, open: bool) {
+    hit::set_stack_open(window.label(), open)
+}
+#[tauri::command]
+fn telemetry_get() -> Value {
+    telemetry::latest_snapshot()
+}
+#[tauri::command(async)]
+fn watchdog_scan() -> Value {
+    telemetry::scan_caches()
+}
+#[tauri::command(async)]
+fn watchdog_clean() -> Value {
+    telemetry::clean_temp_safe()
+}
+#[tauri::command]
+fn watchdog_kill(pid: u32) -> bool {
+    telemetry::kill_pid(pid)
+}
+#[tauri::command]
+fn persian_fix(mode: String, text: String) -> Value {
+    if mode == "zwnj" {
+        let out = persian::polish_persian(&text);
+        serde_json::json!({ "text": out, "lang": "" })
+    } else {
+        let (out, lang) = persian::fix_layout_auto(&text);
+        serde_json::json!({ "text": out, "lang": lang })
+    }
 }
 #[tauri::command]
 fn set_typing(window: tauri::WebviewWindow, on: bool, restore: bool) -> Value {
@@ -423,6 +459,7 @@ fn main() {
     }
     settings::load();
     hit::HOTKEY_WANTED.store(settings::flag("noteHotkey") && debug.is_none(), SeqCst);
+    hit::PERSIAN_HOTKEY_WANTED.store(settings::flag("persianHotkeys") && debug.is_none(), SeqCst);
 
     let mut builder = tauri::Builder::default();
     if debug.is_none() {
@@ -431,18 +468,21 @@ fn main() {
     }
     builder
         .invoke_handler(tauri::generate_handler![
-            set_interactive, set_typing, lost_click, pill_drag_start, switch_monitor, monitor_state, toggle_dual,
+            set_interactive, set_pill_width, set_stack_open, set_typing, lost_click, pill_drag_start, switch_monitor, monitor_state, toggle_dual,
             media, seek, set_volume, toggle_mute, set_viz, notif_act, notif_dismiss, notif_clear,
-            clips_get, clip_copy, clip_pin, clip_remove, clips_clear, copy_text,
+            clips_get, clip_copy, clip_pin, clip_remove, clips_clear, copy_text, persian_fix,
             shelf_get, shelf_add, shelf_add_data, shelf_add_url, shelf_remove, shelf_clear, shelf_reveal, shelf_drag, open_download,
             settings_get, settings_set, action, open_url, ocr_done, speedo_cmd, update_check, update_install,
             notes_get, note_save, note_pin, note_fired, note_remove,
+            telemetry_get, watchdog_scan, watchdog_clean, watchdog_kill,
             vault_list, vault_generate, vault_save, vault_edit, fg_context, vault_copy, copy_secret, vault_reveal, vault_remove, debug_out
         ])
         .setup(move |app| {
             let _ = sys::APP.set(app.handle().clone());
             let win = build_island_window(app.handle(), "main")?;
             hit::start();
+            hit::start_wheel_hook();
+            telemetry::start_webhook();
             create_tray(app)?;
             settings::ensure_autostart();
             std::thread::spawn(|| {

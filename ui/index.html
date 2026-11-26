@@ -16,7 +16,7 @@
 
   <!-- idle: just the time (or a running countdown) -->
   <div class="view on" data-view="idle">
-    <span id="i-face"><i></i><i></i></span><span id="i-time">--:--</span><span id="i-shelf"></span>
+    <span id="i-face"><i></i><i></i></span><span id="i-pulse" title="Antigravity Agent"></span><span id="i-time">--:--</span><span id="i-shelf"></span>
   </div>
 
   <!-- hover on idle: a one-line tray -->
@@ -25,6 +25,7 @@
     <span id="t-date" class="dim" dir="auto" title="Click to switch calendar"></span>
     <span id="t-bat" class="bat-chip dim"></span>
     <span id="t-net" class="tag"></span>
+    <span id="t-agent" class="agent-chip" title="Antigravity & System Watchdog"></span>
     <span class="sep"></span>
     <button class="ib hidden" id="t-track" data-icon="note" title="Back to now playing"></button>
     <button class="ib" id="t-play" data-icon="play" title="Play / Pause"></button>
@@ -33,6 +34,7 @@
     <button class="ib" data-act="clips" id="t-clips" data-icon="clipboard" title="Clipboard history"></button>
     <button class="ib" data-act="notes" id="t-notes" data-icon="jot" title="Quick note (Ctrl+Alt+N)"></button>
     <button class="ib" data-act="vault" id="t-vault" data-icon="key" title="Passwords"></button>
+    <button class="ib" data-act="watchdog" id="t-watch" data-icon="activity" title="System Telemetry, Render/Build Watchdog, Persian Rescue & Focus"></button>
     <button class="ib hidden" data-act="speedo" id="t-speedo" data-icon="shield" title="Speedo VPN"></button>
     <button class="ib" data-act="timer" data-icon="timer" title="Timer"></button>
     <button class="ib hidden" data-act="shelf" id="t-shelf" data-icon="tray" draggable="true" title="File shelf — click to see the files, drag this button to take them all"></button>
@@ -87,8 +89,15 @@
   <!-- volume HUD -->
   <div class="view" data-view="vol" title="Click to mute">
     <span id="v-icon" class="glyph" data-icon="volume"></span>
+    <span id="v-app" class="dim"></span>
     <div class="vbar"><i id="v-fill"></i></div>
     <b id="v-num">50</b>
+  </div>
+
+  <!-- compact game telemetry strip (Ctrl+Alt+G in fullscreen games) -->
+  <div class="view" data-view="game">
+    <span class="glyph blue" data-icon="activity"></span>
+    <span id="gm-stats" class="strong">GPU --°C · VRAM --% · CPU --%</span>
   </div>
 
   <!-- timer -->
