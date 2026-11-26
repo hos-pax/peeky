@@ -15,12 +15,12 @@ use windows::Win32::Foundation::{CloseHandle, FILETIME, HMODULE, HWND};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Diagnostics::ToolHelp::*;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::System::SystemInformation::{GetSystemTimes, GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
-    GetProcessIoCounters, GetProcessTimes, OpenProcess, TerminateProcess, IO_COUNTERS,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    GetProcessIoCounters, GetProcessTimes, GetSystemTimes, OpenProcess, TerminateProcess,
+    IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use crate::{hit, settings, sys};
 

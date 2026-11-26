@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::media::{wait, Media};
 use crate::notif::Notifs;
 use crate::telemetry::TelemetryState;
-use crate::{audio, clip, hit, net, sys, telemetry};
+use crate::{audio, clip, hit, net, settings, sys, telemetry};
 
 pub enum Cmd {
     Toggle,

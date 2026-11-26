@@ -1,5 +1,4 @@
 // 1-keystroke En <-> Fa keyboard-layout rescue, Persian ZWNJ/orthography polisher, and safe in-place selection replacement.
-use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
 use serde_json::json;

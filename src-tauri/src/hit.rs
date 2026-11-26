@@ -1080,37 +1080,6 @@ pub fn start() {
                             s.was_near = near;
                             emit_cur = true;
                         }
-                        if s.pill_width >= 20.0 && !s.stack_open && s.pill_drag.is_none() && s.snap_anim.is_none() {
-                            let half = (s.pill_width * scale * 0.5).round() as i32 + 10;
-                            let cx = (r.left + r.right) / 2;
-                            let top = r.top + (2.0 * scale).round() as i32;
-                            let bot = r.top + (52.0 * scale).round() as i32;
-                            let l = cx - half;
-                            let ri = cx + half;
-                            if pt.x >= l && pt.x <= ri && pt.y >= top && pt.y <= bot {
-                                WHEEL_L.store(l, std::sync::atomic::Ordering::Relaxed);
-                                WHEEL_T.store(top, std::sync::atomic::Ordering::Relaxed);
-                                WHEEL_R.store(ri, std::sync::atomic::Ordering::Relaxed);
-                                WHEEL_B.store(bot, std::sync::atomic::Ordering::Relaxed);
-                                WHEEL_ENABLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                            } else if label == "main" {
-                                // Only turn off if cursor isn't inside secondary pill either
-                                let in_other = slots.iter().any(|o| {
-                                    if o.label == label || o.pill_width < 20.0 || o.stack_open { return false; }
-                                    let oh = slot_hwnd(o.hwnd_raw);
-                                    let or = sys::rect_of(oh);
-                                    let osc = GetDpiForWindow(oh).max(96) as f64 / 96.0;
-                                    let ocx = (or.left + or.right) / 2;
-                                    let ohalf = (o.pill_width * osc * 0.5).round() as i32 + 10;
-                                    pt.x >= ocx - ohalf && pt.x <= ocx + ohalf && pt.y >= or.top && pt.y <= or.top + (52.0 * osc).round() as i32
-                                });
-                                if !in_other {
-                                    WHEEL_ENABLE.store(false, std::sync::atomic::Ordering::Relaxed);
-                                }
-                            }
-                        } else {
-                            WHEEL_ENABLE.store(false, std::sync::atomic::Ordering::Relaxed);
-                        }
                         if d && !s.down && s.interactive && near {
                             let hit = sys::root_of(WindowFromPoint(pt));
                             if hit == h {
@@ -1130,6 +1099,34 @@ pub fn start() {
                             emit_release = true;
                         }
                         s.down = d;
+                    }
+                    let hovered_box = slots.iter().find_map(|o| {
+                        if o.pill_width < 20.0 || o.stack_open || o.pill_drag.is_some() || o.snap_anim.is_some() {
+                            return None;
+                        }
+                        let oh = slot_hwnd(o.hwnd_raw);
+                        let or = sys::rect_of(oh);
+                        let osc = GetDpiForWindow(oh).max(96) as f64 / 96.0;
+                        let ocx = (or.left + or.right) / 2;
+                        let ohalf = (o.pill_width * osc * 0.5).round() as i32 + 10;
+                        let l = ocx - ohalf;
+                        let ri = ocx + ohalf;
+                        let top = or.top + (2.0 * osc).round() as i32;
+                        let bot = or.top + (52.0 * osc).round() as i32;
+                        if pt.x >= l && pt.x <= ri && pt.y >= top && pt.y <= bot {
+                            Some((l, top, ri, bot))
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some((l, top, ri, bot)) = hovered_box {
+                        WHEEL_L.store(l, std::sync::atomic::Ordering::Relaxed);
+                        WHEEL_T.store(top, std::sync::atomic::Ordering::Relaxed);
+                        WHEEL_R.store(ri, std::sync::atomic::Ordering::Relaxed);
+                        WHEEL_B.store(bot, std::sync::atomic::Ordering::Relaxed);
+                        WHEEL_ENABLE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        WHEEL_ENABLE.store(false, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
 
@@ -1184,7 +1181,7 @@ pub fn start_wheel_hook() {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         while let Ok((notches, shift)) = rx.recv() {
             let mut sum = notches;
-            let mut mode_shift = shift;
+            let mode_shift = shift;
             while let Ok((n, s)) = rx.try_recv() {
                 if s == mode_shift {
                     sum += n;
