@@ -912,7 +912,7 @@ pub fn start() {
                         let (tx, ty, tw, th) = center_rect_on(&dest);
                         let target_cx = tx as f64 + tw as f64 / 2.0;
                         let target_y = ty as f64;
-                        let (k, damp) = if sa.merge_into_main { (740.0, 29.0) } else { (520.0, 25.5) };
+                        let (k, damp) = if sa.merge_into_main { (720.0, 27.5) } else { (440.0, 23.0) };
                         let sub_dt = 0.008f64;
                         for _ in 0..2 {
                             let ax = (target_cx - sa.cx) * k - sa.vx * damp;
