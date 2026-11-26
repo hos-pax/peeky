@@ -31,6 +31,9 @@ window.qazi = {
   watchdogScan: () => invoke('watchdog_scan').catch(() => []),
   watchdogClean: () => invoke('watchdog_clean').catch(() => ({ ok: false })),
   watchdogKill: (pid) => invoke('watchdog_kill', { pid: Number(pid) }).catch(() => false),
+  agyHubGet: () => invoke('agy_hub_get').catch(() => ({ convs: [], artifacts: [] })),
+  agyFocus: () => invoke('agy_focus').catch(() => false),
+  agyOpen: (path, reveal) => quiet(invoke('agy_open', { path: String(path || ''), reveal: !!reveal })),
   persianFix: (mode, text) => invoke('persian_fix', { mode: String(mode), text: String(text || '') }).catch(() => ({ text: String(text || ''), lang: '' })),
 
   media: (cmd) => quiet(invoke('media', { cmd })),

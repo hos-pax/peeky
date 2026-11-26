@@ -59,6 +59,18 @@ fn watchdog_clean() -> Value {
 fn watchdog_kill(pid: u32) -> bool {
     telemetry::kill_pid(pid)
 }
+#[tauri::command(async)]
+fn agy_hub_get() -> Value {
+    telemetry::agy_hub_data()
+}
+#[tauri::command]
+fn agy_focus() -> bool {
+    telemetry::focus_antigravity()
+}
+#[tauri::command]
+fn agy_open(path: String, reveal: bool) -> bool {
+    telemetry::agy_open_path(&path, reveal)
+}
 #[tauri::command]
 fn persian_fix(mode: String, text: String) -> Value {
     if mode == "zwnj" {
@@ -474,7 +486,7 @@ fn main() {
             shelf_get, shelf_add, shelf_add_data, shelf_add_url, shelf_remove, shelf_clear, shelf_reveal, shelf_drag, open_download,
             settings_get, settings_set, action, open_url, ocr_done, speedo_cmd, update_check, update_install,
             notes_get, note_save, note_pin, note_fired, note_remove,
-            telemetry_get, watchdog_scan, watchdog_clean, watchdog_kill,
+            telemetry_get, watchdog_scan, watchdog_clean, watchdog_kill, agy_hub_get, agy_focus, agy_open,
             vault_list, vault_generate, vault_save, vault_edit, fg_context, vault_copy, copy_secret, vault_reveal, vault_remove, debug_out
         ])
         .setup(move |app| {

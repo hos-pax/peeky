@@ -176,7 +176,7 @@ function render() {
     cur = v;
     if (v === 'tools' && was === 'idle' && st.hover && !st.pillDrag) sfx.tick();
   }
-  const w = clamp(Math.ceil(views[cur].offsetWidth), 70, 620);
+  const w = clamp(Math.ceil(views[cur].offsetWidth), 70, 680);
   if (island.dataset.w !== String(w) || st.tucked === false && island.dataset.w === 'tuck') {
     island.dataset.w = w;
     island.style.width = w + 'px';
@@ -518,6 +518,7 @@ function renderStack() {
   if (st.stackKind === 'settings') { renderSettings(); return; }
   if (st.stackKind === 'speedo') { renderSpeedo(); return; }
   if (st.stackKind === 'watchdog') { renderWatchdog(); return; }
+  if (st.stackKind === 'agy') { renderAgyHub(); return; }
   if (st.stackKind === 'tour') { renderTour(); return; }
   $('#stack-clear').textContent = 'Clear all';
   $('#stack-clear').classList.toggle('hidden', !st.history.length);
@@ -559,7 +560,7 @@ function setStack(open, kind) {
   $('#t-clips').classList.toggle('active', open && st.stackKind === 'clips');
   $('#t-notes').classList.toggle('active', open && st.stackKind === 'notes');
   $('#t-vault').classList.toggle('active', open && st.stackKind === 'vault');
-  $('#t-watch').classList.toggle('active', open && st.stackKind === 'watchdog');
+  $('#t-watch').classList.toggle('active', open && (st.stackKind === 'watchdog' || st.stackKind === 'agy'));
   $('#t-gear').classList.toggle('active', open && st.stackKind === 'settings');
   $('#t-speedo').classList.toggle('active', open && st.stackKind === 'speedo');
   if (open && kind === 'speedo') loadLocations();
@@ -567,6 +568,9 @@ function setStack(open, kind) {
   if (open && kind === 'watchdog') {
     window.qazi.telemetryGet().then((d) => { if (d && d.cpu !== undefined) { st.telem = d; if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog(); } });
     if (!st.caches) window.qazi.watchdogScan().then((c) => { st.caches = c; if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog(); });
+  }
+  if (open && kind === 'agy') {
+    window.qazi.agyHubGet().then((d) => { st.agyHub = d; if (st.stackOpen && st.stackKind === 'agy') renderAgyHub(); });
   }
   island.classList.remove('hover');
   if (open) {
@@ -794,19 +798,32 @@ function updateAgentChip() {
   const a = st.agent || { state: 'idle' };
   const heavy = (st.telem.jobs || []).find((j) => j.hot);
   if (ip) {
-    ip.className = a.state === 'working' ? 'working' : a.state === 'ready' ? 'ready' : '';
-    ip.title = a.state === 'working' ? `Antigravity working (step ${a.step || '?'})` : a.state === 'ready' ? 'Antigravity ready' : 'Antigravity idle';
+    ip.className = a.state === 'working' ? 'working' : a.state === 'waiting_bg' ? 'waiting_bg' : a.state === 'ready' ? 'ready' : '';
+    ip.title = a.state === 'working'
+      ? `Antigravity: در حال فکر/کدنویسی (استپ ${a.step || '?'})`
+      : a.state === 'waiting_bg'
+        ? `Antigravity: ${a.pendingBg || 1} تسک پس‌زمینه در حال اجرا`
+        : a.state === 'ready'
+          ? 'Antigravity: پاسخ آماده است'
+          : 'Antigravity idle';
   }
   if (ac) {
     if (a.state === 'working') {
       ac.className = 'agent-chip on working';
-      ac.innerHTML = '<i></i><span>AGY #' + (a.step || '·') + '</span>';
+      ac.innerHTML = '<i></i><span>AGY</span>';
+      ac.title = `Antigravity: در حال کار (استپ ${a.step || '?'} · ${a.turnSteps || 0} ابزار)`;
+    } else if (a.state === 'waiting_bg') {
+      ac.className = 'agent-chip on waiting_bg';
+      ac.innerHTML = '<i></i><span>BG</span>';
+      ac.title = `Antigravity: ${a.pendingBg || 1} تسک پس‌زمینه فعال`;
     } else if (heavy) {
       ac.className = 'agent-chip on heavy';
-      ac.innerHTML = '<i></i><span>' + heavy.name + ' ' + Math.round(heavy.cpu || 0) + '%</span>';
+      ac.innerHTML = '<i></i><span>' + heavy.name.slice(0, 7) + '</span>';
+      ac.title = `${heavy.name} · CPU ${Math.round(heavy.cpu || 0)}%`;
     } else if (a.state === 'ready') {
       ac.className = 'agent-chip on ready';
       ac.innerHTML = '<i></i><span>AGY</span>';
+      ac.title = 'Antigravity آماده — کلیک برای دیدن پاسخ و آرتیفکت‌ها';
     } else {
       ac.className = 'agent-chip';
       ac.textContent = '';
@@ -814,7 +831,12 @@ function updateAgentChip() {
   }
 }
 const agChip = $('#t-agent');
-if (agChip) agChip.addEventListener('click', (e) => { e.stopPropagation(); sfx.tick(); setStack(!(st.stackOpen && st.stackKind === 'watchdog'), 'watchdog'); });
+if (agChip) agChip.addEventListener('click', (e) => {
+  e.stopPropagation(); sfx.tick();
+  const isHeavy = agChip.classList.contains('heavy');
+  const next = isHeavy ? 'watchdog' : 'agy';
+  setStack(!(st.stackOpen && st.stackKind === next), next);
+});
 
 window.qazi.onHelper((m) => {
   if (m.t === 'media') { if (!st.freezeMedia) onMedia(m); }
@@ -843,11 +865,18 @@ window.qazi.onHelper((m) => {
       gs.textContent = `${gp} · ${vr} · CPU ${m.cpu}%`;
     }
     if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog();
+    if (st.stackOpen && st.stackKind === 'agy') {
+      window.qazi.agyHubGet().then((d) => { st.agyHub = d; if (st.stackOpen && st.stackKind === 'agy') renderAgyHub(); });
+    }
   }
   else if (m.t === 'agent-done') {
-    st.revealUntil = Math.max(st.revealUntil, Date.now() + 2600);
+    st.revealUntil = Math.max(st.revealUntil, Date.now() + 3200);
     pillGleam(true); spawnEdgeSweep(1.0, false); spawnImpactBloom(0.95, false);
-    if (!st.game) showHud('activity', 'Antigravity', 'پاسخ یا تسک آماده است' + (m.step ? ` (#${m.step})` : ''), 3200, 'green pop');
+    if (!st.game) {
+      showHud('activity', 'پاسخ Antigravity تکمیل شد', m.preview || 'کلیک برای باز کردن پنجره Antigravity', 4200, 'green pop');
+      st.hudAct = () => window.qazi.agyFocus();
+      views.hud.classList.add('act');
+    }
     emote('happy', 1100);
   }
   else if (m.t === 'heavy-done') {
@@ -956,7 +985,7 @@ function sampleLevels(t, playing) {
 }
 
 // ------------------------------------------------------------ the night sky: gradient, drifting lights, twinkling stars
-const SKY_W = 600, SKY_H = 36;
+const SKY_W = 700, SKY_H = 36;
 const sky = $('#sky'), skyG = sky.getContext('2d');
 function sizeSky() {
   const dpr = window.devicePixelRatio || 1;
@@ -1584,10 +1613,17 @@ function drawTopFx(t, dt) {
   const f = fxTopG;
   f.clearRect(0, 0, FX_W, FX_H);
   if (st.tucked && !mergePullActive && !impactBlooms.length && !edgeSweeps.length && !portalSlits.length) return;
-  const cx = FX_W / 2, pw = island.clientWidth || 84;
+  const rect = island.getBoundingClientRect();
+  const rw = rect.width || island.clientWidth || 84;
+  const rh = rect.height || 36;
+  const rx = rect.left || (FX_W / 2 - rw / 2);
+  const ry = rect.top || 8;
+  const cx = rx + rw / 2;
+  const cy = ry + rh / 2;
+  const pw = rw;
   const cols = themeCols();
 
-  // 1) Ferrofluid translucent chromatic echoes along velocity tail (source-over visible on dark & white backgrounds)
+  // 1) Ferrofluid translucent chromatic echoes along velocity tail aligned 1:1 with live pill bounds
   for (let i = dragEchoes.length - 1; i >= 0; i--) {
     const e = dragEchoes[i];
     e.life -= dt * e.fade;
@@ -1601,26 +1637,9 @@ function drawTopFx(t, dt) {
     f.shadowBlur = 10;
     f.lineWidth = 1.6;
     f.beginPath();
-    f.roundRect(cx - e.w / 2 + e.dx, 8 + e.dy, e.w, 36, 18);
+    f.roundRect(cx - (e.w || rw) / 2 + e.dx, ry + e.dy, e.w || rw, rh, rh / 2);
     f.fill();
     f.stroke();
-    f.restore();
-  }
-
-  // 2) Live Cursor Specular Brushed-Titanium Micro-Rim (active even at rest when mouse glides near the pill!)
-  if (cursorInsideNear && !st.tucked && st.cx !== undefined && st.cy !== undefined) {
-    const rect = island.getBoundingClientRect();
-    const lcX = clamp(st.cx - rect.left + (cx - pw / 2), cx - pw * 0.56, cx + pw * 0.56);
-    const lcY = clamp(st.cy - rect.top + 8, 6, 46);
-    const rg = f.createRadialGradient(lcX, lcY, 2, lcX, lcY, Math.max(46, pw * 0.42));
-    rg.addColorStop(0, 'rgba(255, 255, 255, 0.88)');
-    rg.addColorStop(0.35, hexRgba(cols.c1, 0.62));
-    rg.addColorStop(0.75, hexRgba(cols.c3, 0.24));
-    rg.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    f.save();
-    f.strokeStyle = rg;
-    f.lineWidth = 1.8;
-    f.beginPath(); f.roundRect(cx - pw / 2, 8, pw, 36, 18); f.stroke();
     f.restore();
   }
 
@@ -1694,15 +1713,12 @@ function drawTopFx(t, dt) {
     f.restore();
   }
 
-  // 6) Continuous rotating Apple-Intelligence iridescent rim during drag / spring / merge
+  // 6) Continuous rotating Apple-Intelligence iridescent rim during drag / spring / merge (1:1 live DOM rect)
   const rimAmp = liveAbsorbing ? 1.0 : mergePullActive ? clamp(0.55 + liveDragCharge * 0.45, 0.52, 1.0) : st.pillDrag ? clamp(0.5 + liveDragMag * 0.5, 0.48, 0.98) : 0;
   if (rimAmp > 0.05) {
-    const sc = liveAbsorbing ? clamp(1 - liveAbsorbP * 0.74, 0.2, 1) : 1;
-    const rw = (pw + 3) * sc, rh = 38 * sc;
-    const rx = cx - rw / 2, ry = 7 + (36 - rh * (36 / 38)) / 2;
     let rimGrad;
     if (typeof f.createConicGradient === 'function') {
-      rimGrad = f.createConicGradient(t * 0.004, cx, ry + rh * 0.5);
+      rimGrad = f.createConicGradient(t * 0.004, cx, cy);
       rimGrad.addColorStop(0, cols.c1);
       rimGrad.addColorStop(0.22, cols.c3);
       rimGrad.addColorStop(0.45, '#ffffff');
@@ -1717,9 +1733,9 @@ function drawTopFx(t, dt) {
     f.globalAlpha = rimAmp;
     f.strokeStyle = rimGrad;
     f.shadowColor = cols.c3;
-    f.shadowBlur = liveDragHot || liveAbsorbing ? 18 : 12;
-    f.lineWidth = liveDragHot || liveAbsorbing ? 2.8 : 2.2;
-    f.beginPath(); f.roundRect(rx, ry, rw, rh, 19 * sc); f.stroke();
+    f.shadowBlur = liveDragHot || liveAbsorbing ? 16 : 11;
+    f.lineWidth = liveDragHot || liveAbsorbing ? 2.4 : 1.9;
+    f.beginPath(); f.roundRect(rx, ry, rw, rh, Math.min(rh / 2, 19)); f.stroke();
     f.restore();
   }
 
@@ -1791,7 +1807,7 @@ let idleFrames = 0, lastT = 0, lastPaint = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const playing = st.media.playing && musicOn();
-  const hasTopFx = !!(dragEchoes.length || edgeSweeps.length || slipstreams.length || impactBlooms.length || portalSlits.length || st.pillDrag || mergePullActive || cursorInsideNear);
+  const hasTopFx = !!(dragEchoes.length || edgeSweeps.length || slipstreams.length || impactBlooms.length || portalSlits.length || st.pillDrag || mergePullActive);
   const look = st.skin !== 'black' ? st.skin : playing && st.visuals && st.react ? 'sky' : null;
   if (look !== lookNow) {
     if (look && lookNow) skyA = Math.min(skyA, 0.2);
@@ -2022,11 +2038,24 @@ function setAmbientSound(mode) {
   if (st.stackOpen && st.stackKind === 'watchdog') renderWatchdog();
 }
 
+function renderWatchTabs(activeKind) {
+  const tabs = document.createElement('div'); tabs.className = 'row wd-tabs';
+  const b1 = document.createElement('button'); b1.textContent = '⚡ System Watchdog';
+  if (activeKind === 'watchdog') b1.className = 'on';
+  b1.addEventListener('click', () => { sfx.tick(); setStack(true, 'watchdog'); });
+  const b2 = document.createElement('button'); b2.textContent = '🤖 Antigravity Hub';
+  if (activeKind === 'agy') b2.className = 'on';
+  b2.addEventListener('click', () => { sfx.tick(); setStack(true, 'agy'); });
+  tabs.append(b1, b2);
+  stackList.appendChild(tabs);
+}
+
 function renderWatchdog() {
   if (!st.stackOpen || st.stackKind !== 'watchdog') return;
   $('#stack-clear').classList.add('hidden');
   const prevScroll = stackList.scrollTop;
   stackList.textContent = '';
+  renderWatchTabs('watchdog');
   const m = st.telem || {};
 
   // 1) Live CPU / RAM / GPU vitals bar
@@ -2108,6 +2137,73 @@ function renderWatchdog() {
     renderWatchdog();
   });
   cr.append(cl, cb1, cb2); stackList.appendChild(cr);
+  stackList.scrollTop = prevScroll;
+}
+
+function renderAgyHub() {
+  if (!st.stackOpen || st.stackKind !== 'agy') return;
+  $('#stack-clear').classList.add('hidden');
+  const prevScroll = stackList.scrollTop;
+  stackList.textContent = '';
+  renderWatchTabs('agy');
+
+  const a = st.agent || { state: 'idle' };
+  const hub = st.agyHub || { convs: [], artifacts: [], fullReply: '', lastCode: '' };
+  const stTxt = a.state === 'working'
+    ? `در حال کار · استپ #${a.step || '?'} (${a.turnSteps || 0} ابزار · ${a.elapsed || 0}s)`
+    : a.state === 'waiting_bg'
+      ? `در انتظار ${a.pendingBg || 1} تسک پس‌زمینه… (${a.elapsed || 0}s)`
+      : a.state === 'ready'
+        ? `پاسخ کامل آماده است (#${a.step || '✓'})`
+        : 'Antigravity آماده مکالمه';
+
+  const head = document.createElement('div'); head.className = 'row wd-head';
+  const hl = document.createElement('span'); hl.className = 'lbl'; hl.textContent = stTxt;
+  const fbtn = document.createElement('button'); fbtn.className = 'go'; fbtn.textContent = 'فوکوس پنجره';
+  fbtn.addEventListener('click', () => { sfx.tick(); window.qazi.agyFocus(); });
+  head.append(hl, fbtn); stackList.appendChild(head);
+
+  if (hub.fullReply || a.preview) {
+    const pv = document.createElement('div'); pv.className = 'row ag-preview'; pv.dir = 'auto';
+    pv.textContent = (hub.fullReply || a.preview || '').slice(0, 240);
+    stackList.appendChild(pv);
+
+    const acts = document.createElement('div'); acts.className = 'row wd-tabs';
+    const cAll = document.createElement('button'); cAll.textContent = '📋 کپی آخرین پاسخ';
+    cAll.addEventListener('click', () => { window.qazi.copy(hub.fullReply || a.preview || ''); flash('پاسخ کپی شد'); });
+    acts.appendChild(cAll);
+    if (hub.lastCode) {
+      const cCode = document.createElement('button'); cCode.textContent = '💻 کپی آخرین کد';
+      cCode.addEventListener('click', () => { window.qazi.copy(hub.lastCode); flash('بلوک کد کپی شد'); });
+      acts.appendChild(cCode);
+    }
+    stackList.appendChild(acts);
+  }
+
+  const arts = Array.isArray(hub.artifacts) ? hub.artifacts : [];
+  if (arts.length) {
+    arts.slice(0, 4).forEach((ar) => {
+      const row = document.createElement('div'); row.className = 'row wd';
+      const al = document.createElement('span'); al.className = 'lbl'; al.textContent = '📄 ' + ar.name;
+      const bOpen = document.createElement('button'); bOpen.className = 'go'; bOpen.textContent = 'بازکردن';
+      bOpen.addEventListener('click', () => window.qazi.agyOpen(ar.path, false));
+      const bDir = document.createElement('button'); bDir.className = 'go'; bDir.textContent = 'پوشه';
+      bDir.addEventListener('click', () => window.qazi.agyOpen(ar.path, true));
+      row.append(al, bOpen, bDir); stackList.appendChild(row);
+    });
+  }
+
+  const convs = Array.isArray(hub.convs) ? hub.convs : [];
+  convs.slice(0, 4).forEach((c) => {
+    const cr = document.createElement('div'); cr.className = 'row wd';
+    const icon = c.state === 'working' ? '🔵' : c.state === 'waiting_bg' ? '🟡' : '🟢';
+    const cl = document.createElement('span'); cl.className = 'lbl'; cl.dir = 'auto';
+    cl.textContent = `${icon} ${c.shortId} · #${c.step} · ${(c.preview || '').slice(0, 44)}`;
+    const cp = document.createElement('button'); cp.className = 'go'; cp.textContent = 'ID';
+    cp.addEventListener('click', () => { window.qazi.copy(c.id); flash('شناسه چت کپی شد'); });
+    cr.append(cl, cp); stackList.appendChild(cr);
+  });
+
   stackList.scrollTop = prevScroll;
 }
 

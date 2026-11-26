@@ -10,8 +10,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use windows::core::{s, w};
-use windows::Win32::Foundation::{CloseHandle, FILETIME, HMODULE, HWND};
+use windows::core::{s, w, BOOL};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HMODULE, HWND, LPARAM};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Diagnostics::ToolHelp::*;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -20,7 +20,9 @@ use windows::Win32::System::Threading::{
     GetProcessIoCounters, GetProcessTimes, GetSystemTimes, OpenProcess, TerminateProcess,
     IO_COUNTERS, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetForegroundWindow, IsIconic, IsWindowVisible, ShowWindow, SW_RESTORE,
+};
 
 use crate::{hit, settings, sys};
 
@@ -123,8 +125,11 @@ pub struct TelemetryState {
     prev_tick: Instant,
     active_heavy: HashMap<u32, ActiveHeavy>,
     agent_working_since: Option<Instant>,
-    last_agent_state: String,
-    last_agent_seq: u64,
+    agent_had_work: bool,
+    agent_settled_polls: u8,
+    last_agent_conv: String,
+    last_notified_step: u64,
+    last_agent_preview: String,
     last_ambient: Option<[u8; 3]>,
 }
 impl TelemetryState {
@@ -135,8 +140,11 @@ impl TelemetryState {
             prev_tick: Instant::now(),
             active_heavy: HashMap::new(),
             agent_working_since: None,
-            last_agent_state: "idle".into(),
-            last_agent_seq: 0,
+            agent_had_work: false,
+            agent_settled_polls: 0,
+            last_agent_conv: String::new(),
+            last_notified_step: 0,
+            last_agent_preview: String::new(),
             last_ambient: None,
         }
     }
@@ -325,19 +333,221 @@ fn sample_heavy_processes(state: &mut TelemetryState) -> (Vec<Value>, Vec<(Strin
     (jobs, finished)
 }
 
-// ---------------------------------------------------------------- Antigravity Agent Pulse (filesystem-safe)
-fn poll_antigravity(state: &mut TelemetryState) -> (String, Option<String>, Option<u64>, bool) {
+// ---------------------------------------------------------------- Antigravity Agent Pulse (turn-aware, final-reply debounced + AGY Hub)
+fn strip_html_clean(s: &str) -> String {
+    let mut out = String::with_capacity(s.len().min(600));
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                if in_tag {
+                    in_tag = false;
+                    out.push(' ');
+                } else {
+                    out.push('>');
+                }
+            }
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+        if out.len() > 1400 {
+            break;
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn extract_last_code(raw: &str) -> Option<String> {
+    let mut best: Option<&str> = None;
+    let mut rest = raw;
+    while let Some(i) = rest.find("```") {
+        let after = &rest[i + 3..];
+        let body_start = after.find('\n').map(|n| n + 1).unwrap_or(0);
+        if let Some(end) = after[body_start..].find("```") {
+            let block = after[body_start..body_start + end].trim();
+            if !block.is_empty() {
+                best = Some(block);
+            }
+            rest = &after[body_start + end + 3..];
+        } else {
+            break;
+        }
+    }
+    best.map(|b| b.to_string())
+}
+
+fn read_tail_str(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let seek = len.saturating_sub(max_bytes);
+    f.seek(SeekFrom::Start(seek)).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let mut s = String::from_utf8_lossy(&buf).into_owned();
+    if seek > 0 {
+        if let Some(pos) = s.find('\n') {
+            s = s[pos + 1..].to_string();
+        }
+    }
+    Some(s)
+}
+
+#[derive(Default)]
+struct ConvAnalysis {
+    state: String,
+    step: u64,
+    turn_steps: usize,
+    pending_bg: usize,
+    is_final_planner: bool,
+    preview: String,
+    full_reply: String,
+    last_code: String,
+    age_s: u64,
+}
+
+fn analyze_conversation(conv_dir: &Path, want_full: bool) -> Option<ConvAnalysis> {
+    let log_p = conv_dir.join(".system_generated").join("logs").join("transcript.jsonl");
+    let meta = std::fs::metadata(&log_p).ok()?;
+    let mt = meta.modified().ok()?;
+    let age_s = SystemTime::now().duration_since(mt).map(|d| d.as_secs()).unwrap_or(999);
+    let tail = read_tail_str(&log_p, 48 * 1024)?;
+    let vals: Vec<Value> = tail
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect();
+    if vals.is_empty() {
+        return None;
+    }
+
+    // Slice from latest USER_INPUT forward so earlier finished turns never bleed in
+    let turn_start = vals
+        .iter()
+        .rposition(|v| v.get("type").and_then(|x| x.as_str()) == Some("USER_INPUT"))
+        .unwrap_or(0);
+    let turn = &vals[turn_start..];
+    let mut started_tasks: Vec<String> = Vec::new();
+    let mut finished_tasks: Vec<String> = Vec::new();
+    let mut turn_tools = 0usize;
+    let mut last_planner_idx: Option<u64> = None;
+    let mut last_planner_raw = String::new();
+    let mut last_planner_trunc = false;
+
+    for v in turn {
+        let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        let st = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
+        let c = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
+        if typ == "GENERIC" {
+            turn_tools += 1;
+            if let Some(pos) = c.find("task id:") {
+                let id_part = c[pos + 8..].split_whitespace().next().unwrap_or("").trim_matches('"').to_string();
+                if !id_part.is_empty() && !started_tasks.contains(&id_part) {
+                    started_tasks.push(id_part);
+                }
+            } else if st == "RUNNING" {
+                // Unknown foreground running generic tool without explicit task id
+                started_tasks.push(format!("step-{}", v.get("step_index").and_then(|x| x.as_u64()).unwrap_or(0)));
+            }
+        } else if typ == "SYSTEM_MESSAGE" {
+            if c.contains("finished with result") {
+                for tid in &started_tasks {
+                    if c.contains(tid) && !finished_tasks.contains(tid) {
+                        finished_tasks.push(tid.clone());
+                    }
+                }
+            }
+        } else if typ == "PLANNER_RESPONSE" && !c.trim().is_empty() {
+            last_planner_idx = v.get("step_index").and_then(|x| x.as_u64());
+            last_planner_raw = c.to_string();
+            last_planner_trunc = v
+                .get("truncated_fields")
+                .and_then(|x| x.as_array())
+                .is_some_and(|arr| arr.iter().any(|t| t.as_str() == Some("content")));
+        }
+    }
+
+    let pending_bg = started_tasks.iter().filter(|t| !finished_tasks.contains(t)).count();
+    let last = turn.last()?;
+    let step = last.get("step_index").and_then(|x| x.as_u64()).unwrap_or(0);
+    let last_typ = last.get("type").and_then(|x| x.as_str()).unwrap_or("");
+    let last_st = last.get("status").and_then(|x| x.as_str()).unwrap_or("");
+    let last_c = last.get("content").and_then(|x| x.as_str()).unwrap_or("");
+    let has_tool_calls = last.get("tool_calls").is_some()
+        || last
+            .get("truncated_fields")
+            .and_then(|x| x.as_array())
+            .is_some_and(|arr| arr.iter().any(|t| t.as_str() == Some("tool_calls")));
+
+    // Wait-only turn (model output while background command still running) stays in waiting_bg, NOT final done!
+    let is_final_planner = last_typ == "PLANNER_RESPONSE"
+        && last_st == "DONE"
+        && !last_c.trim().is_empty()
+        && !has_tool_calls
+        && pending_bg == 0;
+
+    if (want_full || is_final_planner) && last_planner_trunc {
+        if let Some(target_idx) = last_planner_idx {
+            let full_p = conv_dir.join(".system_generated").join("logs").join("transcript_full.jsonl");
+            if let Some(ftail) = read_tail_str(&full_p, 80 * 1024) {
+                for line in ftail.lines().rev() {
+                    if let Ok(fv) = serde_json::from_str::<Value>(line) {
+                        if fv.get("step_index").and_then(|x| x.as_u64()) == Some(target_idx) {
+                            if let Some(fc) = fv.get("content").and_then(|x| x.as_str()) {
+                                last_planner_raw = fc.to_string();
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let clean_text = strip_html_clean(&last_planner_raw);
+    let preview: String = clean_text.chars().take(110).collect();
+    let full_reply: String = clean_text.chars().take(3500).collect();
+    let last_code = if want_full {
+        extract_last_code(&last_planner_raw).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let state_str = if pending_bg > 0 {
+        "waiting_bg"
+    } else if !is_final_planner || age_s <= 2 {
+        "working"
+    } else if age_s < 240 {
+        "ready"
+    } else {
+        "idle"
+    };
+
+    Some(ConvAnalysis {
+        state: state_str.into(),
+        step,
+        turn_steps: turn_tools,
+        pending_bg,
+        is_final_planner,
+        preview,
+        full_reply,
+        last_code,
+        age_s,
+    })
+}
+
+fn poll_antigravity(state: &mut TelemetryState) -> (String, Option<String>, Option<u64>, bool, usize, usize, u64, String) {
     if !settings::flag("agentPulse") {
-        return ("off".into(), None, None, false);
+        return ("off".into(), None, None, false, 0, 0, 0, String::new());
     }
     let Some(profile) = std::env::var_os("USERPROFILE") else {
-        return ("idle".into(), None, None, false);
+        return ("idle".into(), None, None, false, 0, 0, 0, String::new());
     };
     let brain = PathBuf::from(profile).join(".gemini").join("antigravity").join("brain");
     let Ok(rd) = std::fs::read_dir(&brain) else {
-        return ("idle".into(), None, None, false);
+        return ("idle".into(), None, None, false, 0, 0, 0, String::new());
     };
-    let mut best_log: Option<(SystemTime, PathBuf, String)> = None;
+    let mut best_conv: Option<(SystemTime, PathBuf, String)> = None;
     for ent in rd.flatten() {
         let name = ent.file_name().to_string_lossy().to_string();
         if name.len() < 12 {
@@ -346,55 +556,199 @@ fn poll_antigravity(state: &mut TelemetryState) -> (String, Option<String>, Opti
         let log_p = ent.path().join(".system_generated").join("logs").join("transcript.jsonl");
         if let Ok(meta) = std::fs::metadata(&log_p) {
             if let Ok(mt) = meta.modified() {
-                if best_log.as_ref().is_none_or(|(bt, _, _)| mt > *bt) {
-                    best_log = Some((mt, log_p, name));
+                if best_conv.as_ref().is_none_or(|(bt, _, _)| mt > *bt) {
+                    best_conv = Some((mt, ent.path(), name));
                 }
             }
         }
     }
-    let Some((mt, log_p, conv_id)) = best_log else {
-        return ("idle".into(), None, None, false);
+    let Some((_, conv_dir, conv_id)) = best_conv else {
+        return ("idle".into(), None, None, false, 0, 0, 0, String::new());
     };
-    let age_s = SystemTime::now().duration_since(mt).map(|d| d.as_secs()).unwrap_or(999);
-    // Read strictly tail 4KB of active transcript.jsonl
-    let mut working = age_s <= 4;
-    let mut step_idx: u64 = 0;
-    if let Ok(mut f) = std::fs::File::open(&log_p) {
-        let len = f.metadata().map(|m| m.len()).unwrap_or(0);
-        let seek = len.saturating_sub(4096);
-        if f.seek(SeekFrom::Start(seek)).is_ok() {
-            let mut s = String::new();
-            if f.read_to_string(&mut s).is_ok() {
-                if let Some(last_line) = s.lines().rfind(|l| !l.trim().is_empty()) {
-                    if let Ok(v) = serde_json::from_str::<Value>(last_line) {
-                        step_idx = v.get("step_index").and_then(|x| x.as_u64()).unwrap_or(0);
-                        let src = v.get("source").and_then(|x| x.as_str()).unwrap_or("");
-                        let st = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-                        if st != "DONE" || (src == "USER" && age_s < 45) {
-                            working = true;
+    if conv_id != state.last_agent_conv {
+        state.last_agent_conv = conv_id.clone();
+        state.agent_had_work = false;
+        state.agent_settled_polls = 0;
+        state.agent_working_since = None;
+        state.last_notified_step = 0;
+    }
+
+    let Some(a) = analyze_conversation(&conv_dir, false) else {
+        return ("idle".into(), Some(conv_id), None, false, 0, 0, 0, String::new());
+    };
+
+    let mut just_finished = false;
+    let mut final_state = a.state.clone();
+    if a.pending_bg > 0 || !a.is_final_planner || a.age_s <= 2 {
+        state.agent_settled_polls = 0;
+        if a.age_s < 120 {
+            state.agent_had_work = true;
+            if state.agent_working_since.is_none() {
+                state.agent_working_since = Some(Instant::now());
+            }
+        }
+        final_state = if a.pending_bg > 0 { "waiting_bg".into() } else { "working".into() };
+    } else {
+        // Final PLANNER_RESPONSE settled with no pending background tasks or tool calls: debounce 2 polls (~3.6s)
+        state.agent_settled_polls = state.agent_settled_polls.saturating_add(1);
+        if state.agent_had_work && state.agent_settled_polls >= 2 && a.step != state.last_notified_step {
+            state.last_notified_step = a.step;
+            state.agent_had_work = false;
+            state.agent_working_since = None;
+            just_finished = true;
+            state.last_agent_preview = a.preview.clone();
+        } else if state.agent_had_work && state.agent_settled_polls < 2 {
+            final_state = "working".into();
+        }
+    }
+    let elapsed_s = state.agent_working_since.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+    (
+        final_state,
+        Some(conv_id),
+        Some(a.step),
+        just_finished,
+        a.turn_steps,
+        a.pending_bg,
+        elapsed_s,
+        a.preview,
+    )
+}
+
+pub fn focus_antigravity() -> bool {
+    struct Ctx {
+        best: Option<(i64, HWND)>,
+    }
+    unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        if !IsWindowVisible(hwnd).as_bool() {
+            return BOOL(1);
+        }
+        let pid = sys::pid_of(hwnd);
+        let Some(exe) = sys::exe_of_pid(pid) else { return BOOL(1) };
+        if !exe.to_ascii_lowercase().ends_with("antigravity.exe") {
+            return BOOL(1);
+        }
+        let r = sys::rect_of(hwnd);
+        let area = (r.right - r.left).max(0) as i64 * (r.bottom - r.top).max(0) as i64;
+        if area < 40_000 {
+            return BOOL(1);
+        }
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        if ctx.best.is_none_or(|(best_a, _)| area > best_a) {
+            ctx.best = Some((area, hwnd));
+        }
+        BOOL(1)
+    }
+    unsafe {
+        let mut ctx = Ctx { best: None };
+        let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut Ctx as isize));
+        if let Some((_, hwnd)) = ctx.best {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            sys::force_foreground(hwnd);
+            return true;
+        }
+    }
+    false
+}
+
+pub fn agy_hub_data() -> Value {
+    let Some(profile) = std::env::var_os("USERPROFILE") else {
+        return json!({ "convs": [], "artifacts": [] });
+    };
+    let brain = PathBuf::from(profile).join(".gemini").join("antigravity").join("brain");
+    let Ok(rd) = std::fs::read_dir(&brain) else {
+        return json!({ "convs": [], "artifacts": [] });
+    };
+    let mut dirs: Vec<(SystemTime, PathBuf, String)> = Vec::new();
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().to_string();
+        if name.len() < 12 {
+            continue;
+        }
+        let log_p = ent.path().join(".system_generated").join("logs").join("transcript.jsonl");
+        if let Ok(m) = std::fs::metadata(&log_p) {
+            if let Ok(mt) = m.modified() {
+                dirs.push((mt, ent.path(), name));
+            }
+        }
+    }
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut convs = Vec::new();
+    let mut active_artifacts = Vec::new();
+    let mut full_reply = String::new();
+    let mut last_code = String::new();
+
+    for (idx, (_, dir, id)) in dirs.into_iter().take(4).enumerate() {
+        let is_first = idx == 0;
+        if let Some(a) = analyze_conversation(&dir, is_first) {
+            if is_first {
+                full_reply = a.full_reply.clone();
+                last_code = a.last_code.clone();
+                // Collect generated files (artifacts & scratch scripts) excluding .system_generated
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for f in entries.flatten() {
+                        let fnm = f.file_name().to_string_lossy().to_string();
+                        if fnm.starts_with('.') {
+                            continue;
+                        }
+                        let p = f.path();
+                        if p.is_file() && !fnm.ends_with(".resolved") && !fnm.contains(".metadata.") {
+                            active_artifacts.push(json!({ "name": fnm, "path": p.to_string_lossy() }));
+                        } else if p.is_dir() && fnm == "scratch" {
+                            if let Ok(sc) = std::fs::read_dir(&p) {
+                                for sf in sc.flatten().take(8) {
+                                    if sf.path().is_file() {
+                                        active_artifacts.push(json!({
+                                            "name": format!("scratch/{}", sf.file_name().to_string_lossy()),
+                                            "path": sf.path().to_string_lossy(),
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                        if active_artifacts.len() >= 10 {
+                            break;
                         }
                     }
                 }
             }
+            convs.push(json!({
+                "id": id,
+                "shortId": id.chars().take(8).collect::<String>(),
+                "state": a.state,
+                "step": a.step,
+                "tools": a.turn_steps,
+                "pendingBg": a.pending_bg,
+                "ageSec": a.age_s,
+                "preview": a.preview,
+            }));
         }
     }
-    let mut just_finished = false;
-    let cur_state = if working {
-        if state.agent_working_since.is_none() {
-            state.agent_working_since = Some(Instant::now());
-        }
-        "working".to_string()
+    json!({
+        "convs": convs,
+        "artifacts": active_artifacts,
+        "fullReply": full_reply,
+        "lastCode": last_code,
+    })
+}
+
+pub fn agy_open_path(path: &str, reveal: bool) -> bool {
+    let Some(profile) = std::env::var_os("USERPROFILE") else { return false };
+    let base = PathBuf::from(profile).join(".gemini").join("antigravity").join("brain");
+    let Ok(base_c) = std::fs::canonicalize(&base) else { return false };
+    let Ok(target_c) = std::fs::canonicalize(path) else { return false };
+    if !target_c.starts_with(&base_c) || !target_c.is_file() {
+        return false;
+    }
+    let s = target_c.to_string_lossy().to_string();
+    if reveal {
+        sys::reveal_in_folder(&s);
     } else {
-        if let Some(since) = state.agent_working_since.take() {
-            if since.elapsed() >= Duration::from_secs(4) && step_idx != state.last_agent_seq {
-                just_finished = true;
-            }
-        }
-        state.last_agent_seq = step_idx;
-        if age_s < 180 { "ready".to_string() } else { "idle".to_string() }
-    };
-    state.last_agent_state = cur_state.clone();
-    (cur_state, Some(conv_id), Some(step_idx), just_finished)
+        sys::shell_open(&s, None);
+    }
+    true
 }
 
 // ---------------------------------------------------------------- Adaptive Chameleon Screen Edge Sampler
@@ -483,7 +837,7 @@ pub fn tick(state: &mut TelemetryState) {
     let (ram_pct, ram_used_gb, ram_tot_gb) = ram_stats();
     let (gpu_temp, gpu_util, vram_used_mb, vram_tot_mb) = gpu_stats();
     let (jobs, finished) = sample_heavy_processes(state);
-    let (agent_state, agent_conv, agent_step, agent_done) = poll_antigravity(state);
+    let (agent_state, agent_conv, agent_step, agent_done, turn_steps, pending_bg, elapsed_s, agent_preview) = poll_antigravity(state);
 
     let payload = json!({
         "t": "telemetry",
@@ -500,6 +854,10 @@ pub fn tick(state: &mut TelemetryState) {
             "state": agent_state,
             "conv": agent_conv,
             "step": agent_step,
+            "turnSteps": turn_steps,
+            "pendingBg": pending_bg,
+            "elapsed": elapsed_s,
+            "preview": agent_preview,
             "justFinished": agent_done,
         }
     });
@@ -510,7 +868,7 @@ pub fn tick(state: &mut TelemetryState) {
         sys::helper(json!({ "t": "heavy-done", "name": name, "secs": secs }));
     }
     if agent_done {
-        sys::helper(json!({ "t": "agent-done", "step": agent_step }));
+        sys::helper(json!({ "t": "agent-done", "step": agent_step, "preview": state.last_agent_preview }));
     }
 }
 
