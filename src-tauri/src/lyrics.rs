@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use windows::core::HSTRING;
 use windows::Win32::System::Com::Urlmon::URLDownloadToFileW;
 
-use crate::{settings, sys};
+use crate::sys;
 
 static IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -37,6 +37,8 @@ pub struct CachedLyrics {
     pub instrumental: bool,
     #[serde(default)]
     pub source: String,
+    #[serde(default)]
+    pub timed_mode: String,
     #[serde(default)]
     pub offset_ms: i64,
     pub fetched_at: u64,
@@ -65,6 +67,50 @@ fn cache_path(key: &str) -> PathBuf {
     cache_dir().join(format!("{:016x}.json", fnv1a_64(key)))
 }
 
+/// Generates proportional character-weighted line timestamps when LRCLIB only provides plain lyrics.
+pub fn build_smart_timed_lines(plain: &str, dur_ms: u64) -> Vec<LyricLine> {
+    let raw_lines: Vec<&str> = plain.lines().map(|l| l.trim()).collect();
+    if !raw_lines.iter().any(|l| !l.is_empty()) {
+        return Vec::new();
+    }
+    let total_ms = if dur_ms >= 20_000 { dur_ms } else { 200_000 };
+    let start_ms = (total_ms as f64 * 0.055) as u64;
+    let end_ms = (total_ms as f64 * 0.935) as u64;
+    let span_ms = end_ms.saturating_sub(start_ms).max(15_000) as f64;
+
+    let mut weights: Vec<(String, f64)> = Vec::new();
+    let mut prev_empty = true;
+    for l in raw_lines {
+        if l.is_empty() {
+            if !prev_empty && !weights.is_empty() {
+                // Stanza pause: slight instrumental breath
+                weights.push((String::new(), 4.5));
+            }
+            prev_empty = true;
+        } else {
+            let chars = l.chars().count().max(6) as f64;
+            weights.push((l.to_string(), chars + 5.0));
+            prev_empty = false;
+        }
+    }
+    while matches!(weights.last(), Some((s, _)) if s.is_empty()) {
+        weights.pop();
+    }
+    let total_w: f64 = weights.iter().map(|(_, w)| *w).sum();
+    if total_w <= 0.0 || weights.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(weights.len());
+    let mut acc = 0.0;
+    for (text, w) in weights {
+        let ms = start_ms + ((acc / total_w) * span_ms).round() as u64;
+        out.push(LyricLine { ms, text });
+        acc += w;
+    }
+    out
+}
+
 fn read_cache(key: &str) -> Option<CachedLyrics> {
     let raw = fs::read_to_string(cache_path(key)).ok()?;
     serde_json::from_str::<CachedLyrics>(&raw).ok()
@@ -77,6 +123,13 @@ fn write_cache(entry: &CachedLyrics) {
 }
 
 fn emit_lyrics(entry: &CachedLyrics, status: &str) {
+    let mode = if !entry.timed_mode.is_empty() {
+        entry.timed_mode.clone()
+    } else if !entry.synced.is_empty() {
+        "synced".to_string()
+    } else {
+        "none".to_string()
+    };
     sys::helper(json!({
         "t": "lyrics",
         "key": entry.key,
@@ -87,6 +140,7 @@ fn emit_lyrics(entry: &CachedLyrics, status: &str) {
         "plain": entry.plain,
         "instrumental": entry.instrumental,
         "source": entry.source,
+        "timedMode": mode,
         "offsetMs": entry.offset_ms,
     }));
 }
@@ -171,6 +225,21 @@ fn strip_brackets(s: &str) -> String {
     out
 }
 
+fn find_ascii_ci_char_pos(haystack: &str, needle: &str) -> Option<usize> {
+    let nb = needle.as_bytes();
+    if nb.is_empty() {
+        return None;
+    }
+    for (byte_idx, _) in haystack.char_indices() {
+        if let Some(sub) = haystack.as_bytes().get(byte_idx..byte_idx + nb.len()) {
+            if sub.eq_ignore_ascii_case(nb) {
+                return Some(byte_idx);
+            }
+        }
+    }
+    None
+}
+
 /// Cleans noisy browser/YouTube titles into crisp `(track, artist)` hints for LRCLIB.
 pub fn normalize_meta(raw_title: &str, raw_artist: &str) -> (String, String) {
     let mut artist = raw_artist.trim().to_string();
@@ -196,8 +265,7 @@ pub fn normalize_meta(raw_title: &str, raw_artist: &str) -> (String, String) {
         "feat.", "ft.", "feat ", "ft ", "with ", "prod. by", "official video",
         "official audio", "lyric video", "lyrics", "visualizer",
     ] {
-        let lower = title.to_lowercase();
-        if let Some(pos) = lower.find(noise) {
+        if let Some(pos) = find_ascii_ci_char_pos(&title, noise) {
             if pos > 2 {
                 let prefix = title[..pos].trim_end_matches(|c: char| c == ' ' || c == '-' || c == '|' || c == ',');
                 if !prefix.is_empty() {
@@ -280,11 +348,11 @@ fn parse_lrc_stamp(tag: &str) -> Option<u64> {
     if ss >= 60 {
         return None;
     }
-    let frac_ms: u64 = match frac_s.len() {
+    let frac_ms: u64 = match frac_s.chars().count() {
         0 => 0,
         1 => frac_s.parse::<u64>().ok()? * 100,
         2 => frac_s.parse::<u64>().ok()? * 10,
-        _ => frac_s[..3].parse::<u64>().ok()?,
+        _ => frac_s.chars().take(3).collect::<String>().parse::<u64>().ok()?,
     };
     Some((mm * 60 + ss) * 1000 + frac_ms)
 }
@@ -304,14 +372,38 @@ fn strip_inline_word_tags(s: &str) -> String {
     out
 }
 
-fn entry_from_lrclib(v: &Value, key: &str, fallback_track: &str, fallback_artist: &str, offset_ms: i64) -> Option<CachedLyrics> {
+fn entry_from_lrclib(
+    v: &Value,
+    key: &str,
+    fallback_track: &str,
+    fallback_artist: &str,
+    dur_ms: u64,
+    offset_ms: i64,
+) -> Option<CachedLyrics> {
     if v.get("statusCode").and_then(|c| c.as_u64()).is_some() {
         return None;
     }
     let synced_raw = v.get("syncedLyrics").and_then(|s| s.as_str()).unwrap_or("");
     let plain = v.get("plainLyrics").and_then(|s| s.as_str()).unwrap_or("").trim().to_string();
     let instrumental = v.get("instrumental").and_then(|b| b.as_bool()).unwrap_or(false);
-    let synced = parse_lrc(synced_raw);
+    let mut synced = parse_lrc(synced_raw);
+    let mut timed_mode = if !synced.is_empty() {
+        "synced".to_string()
+    } else {
+        "none".to_string()
+    };
+    if synced.is_empty() && !plain.is_empty() && !instrumental {
+        let track_dur = v
+            .get("duration")
+            .and_then(|d| d.as_f64())
+            .map(|s| (s * 1000.0).round() as u64)
+            .filter(|&d| d >= 20_000)
+            .unwrap_or(dur_ms);
+        synced = build_smart_timed_lines(&plain, track_dur);
+        if !synced.is_empty() {
+            timed_mode = "auto".to_string();
+        }
+    }
     if synced.is_empty() && plain.is_empty() && !instrumental {
         return None;
     }
@@ -335,6 +427,7 @@ fn entry_from_lrclib(v: &Value, key: &str, fallback_track: &str, fallback_artist
         plain,
         instrumental,
         source: "lrclib".to_string(),
+        timed_mode,
         offset_ms,
         fetched_at: sys::now_ms(),
     })
@@ -399,7 +492,7 @@ fn lookup_remote(key: &str, raw_title: &str, raw_artist: &str, dur_ms: u64, offs
             url.push_str(&format!("&duration={}", d));
         }
         if let Some(v) = http_get_json(&url) {
-            if let Some(entry) = entry_from_lrclib(&v, key, &track, &artist, offset_ms) {
+            if let Some(entry) = entry_from_lrclib(&v, key, &track, &artist, dur_ms, offset_ms) {
                 return Some(entry);
             }
         }
@@ -422,7 +515,7 @@ fn lookup_remote(key: &str, raw_title: &str, raw_artist: &str, dur_ms: u64, offs
             .max_by_key(|v| score_candidate(v, &track, &artist, dur_sec))
         {
             if score_candidate(best, &track, &artist, dur_sec) > 0 {
-                if let Some(entry) = entry_from_lrclib(best, key, &track, &artist, offset_ms) {
+                if let Some(entry) = entry_from_lrclib(best, key, &track, &artist, dur_ms, offset_ms) {
                     return Some(entry);
                 }
             }
@@ -439,7 +532,7 @@ fn lookup_remote(key: &str, raw_title: &str, raw_artist: &str, dur_ms: u64, offs
                 .max_by_key(|v| score_candidate(v, &track, &artist, dur_sec))
             {
                 if score_candidate(best, &track, &artist, dur_sec) > 0 {
-                    if let Some(entry) = entry_from_lrclib(best, key, &track, &artist, offset_ms) {
+                    if let Some(entry) = entry_from_lrclib(best, key, &track, &artist, dur_ms, offset_ms) {
                         return Some(entry);
                     }
                 }
@@ -449,15 +542,24 @@ fn lookup_remote(key: &str, raw_title: &str, raw_artist: &str, dur_ms: u64, offs
     None
 }
 
-/// Fetches lyrics for the active track on a background thread (hitting disk cache first).
+/// Fetches lyrics for the active track on a background thread (hitting disk cache first, always active).
 pub fn fetch_async(title: &str, artist: &str, key: &str, dur_ms: u64, force: bool) {
-    if !settings::flag("lyrics") || key.is_empty() || title.trim().is_empty() {
+    if key.is_empty() || title.trim().is_empty() {
         return;
     }
 
     let existing_offset = read_cache(key).map(|c| c.offset_ms).unwrap_or(0);
     if !force {
-        if let Some(cached) = read_cache(key) {
+        if let Some(mut cached) = read_cache(key) {
+            // Upgrade cached plain-only entries automatically to proportional timed lines
+            if cached.synced.is_empty() && !cached.plain.trim().is_empty() && !cached.instrumental {
+                let timed = build_smart_timed_lines(&cached.plain, dur_ms);
+                if !timed.is_empty() {
+                    cached.synced = timed;
+                    cached.timed_mode = "auto".to_string();
+                    write_cache(&cached);
+                }
+            }
             let age = sys::now_ms().saturating_sub(cached.fetched_at);
             let ttl = if cached.synced.is_empty() && cached.plain.is_empty() && !cached.instrumental {
                 CACHE_TTL_MISS_MS
@@ -477,7 +579,7 @@ pub fn fetch_async(title: &str, artist: &str, key: &str, dur_ms: u64, force: boo
     }
 
     {
-        let mut set = flight_set().lock().unwrap();
+        let mut set = flight_set().lock().unwrap_or_else(|e| e.into_inner());
         if set.contains(key) {
             return;
         }
@@ -498,6 +600,7 @@ pub fn fetch_async(title: &str, artist: &str, key: &str, dur_ms: u64, force: boo
         "plain": "",
         "instrumental": false,
         "source": "",
+        "timedMode": "none",
         "offsetMs": existing_offset,
     }));
 
@@ -513,6 +616,7 @@ pub fn fetch_async(title: &str, artist: &str, key: &str, dur_ms: u64, force: boo
                 plain: String::new(),
                 instrumental: false,
                 source: String::new(),
+                timed_mode: "none".to_string(),
                 offset_ms: existing_offset,
                 fetched_at: sys::now_ms(),
             }
@@ -525,7 +629,7 @@ pub fn fetch_async(title: &str, artist: &str, key: &str, dur_ms: u64, force: boo
         };
         emit_lyrics(&entry, status);
 
-        let mut set = flight_set().lock().unwrap();
+        let mut set = flight_set().lock().unwrap_or_else(|e| e.into_inner());
         set.remove(&key_s);
     });
 }
@@ -578,7 +682,7 @@ pub fn apply_candidate_id(key: &str, id: u64) -> bool {
         return false;
     };
     let existing_offset = read_cache(key).map(|c| c.offset_ms).unwrap_or(0);
-    let Some(entry) = entry_from_lrclib(&v, key, "", "", existing_offset) else {
+    let Some(entry) = entry_from_lrclib(&v, key, "", "", 0, existing_offset) else {
         return false;
     };
     write_cache(&entry);

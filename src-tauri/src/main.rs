@@ -306,21 +306,27 @@ async fn lyrics_pick(key: String, id: u64) -> bool {
 fn lyrics_offset(key: String, offset_ms: i64) -> bool {
     lyrics::set_offset(&key, offset_ms)
 }
-#[tauri::command]
-fn audio_outputs() -> Vec<Value> {
-    audio_dev::list_outputs()
+#[tauri::command(async)]
+async fn audio_outputs() -> Vec<Value> {
+    tauri::async_runtime::spawn_blocking(audio_dev::list_outputs).await.unwrap_or_default()
 }
-#[tauri::command]
-fn audio_set_output(id: String) -> bool {
-    let ok = audio_dev::set_default_output(&id);
-    if ok {
-        sys::helper(serde_json::json!({ "t": "audio-outputs", "devices": audio_dev::list_outputs() }));
-    }
-    ok
+#[tauri::command(async)]
+async fn audio_set_output(id: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ok = audio_dev::set_default_output(&id);
+        if ok {
+            sys::helper(serde_json::json!({ "t": "audio-outputs", "devices": audio_dev::list_outputs() }));
+        }
+        ok
+    })
+    .await
+    .unwrap_or(false)
 }
-#[tauri::command]
-fn audio_cycle_output() -> Value {
-    audio_dev::cycle_output()
+#[tauri::command(async)]
+async fn audio_cycle_output() -> Value {
+    tauri::async_runtime::spawn_blocking(audio_dev::cycle_output)
+        .await
+        .unwrap_or_else(|_| serde_json::json!({ "ok": false, "devices": [] }))
 }
 
 // ---------------------------------------------------------------- commands: notes and vault
@@ -498,6 +504,16 @@ pub fn build_island_window(app: &tauri::AppHandle, label: &str) -> tauri::Result
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("unknown panic");
+        sys::log(&format!("[PANIC] {} @ {}", msg, loc));
+    }));
     let debug = std::env::var_os("ISLAND_DEBUG").map(PathBuf::from);
     let _ = sys::DEBUG_DIR.set(debug.clone());
     if let Some(y) = std::env::var("ISLAND_Y").ok().and_then(|v| v.parse::<isize>().ok()) {

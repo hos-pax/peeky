@@ -863,7 +863,7 @@ fn sample_backdrop_grid(state: &mut TelemetryState, cx: i32, top_y: i32, pill_w:
 
         if settings::flag("liquidGlass") {
             let lock = LAST_RGB.get_or_init(|| Mutex::new(Vec::new()));
-            let mut prev = lock.lock().unwrap();
+            let mut prev = lock.lock().unwrap_or_else(|e| e.into_inner());
             let changed = prev.len() != rgb.len()
                 || prev.iter().zip(rgb.iter()).any(|(&x, &y)| x.abs_diff(y) > 9);
             if changed {

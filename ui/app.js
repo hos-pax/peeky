@@ -738,65 +738,118 @@ function setArt(b64) {
   img.onerror = () => setArt(null);
   img.src = url;
 }
-// ------------------------------------------------------------ synced song lyrics (LRCLIB)
+// ------------------------------------------------------------ synced song lyrics (always-on kinetic typography + karaoke highlight)
+let lyrWordEls = [], lyrWordBounds = [], lyrLastWord = -2, lyrBeatT = 0;
 function fmtLyrT(ms) {
   const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60);
   return m + ':' + String(s % 60).padStart(2, '0');
 }
+function artBeat() {
+  const art = $('#art');
+  if (!art) return;
+  art.classList.remove('lyr-beat'); void art.offsetWidth; art.classList.add('lyr-beat');
+  clearTimeout(lyrBeatT);
+  lyrBeatT = setTimeout(() => art.classList.remove('lyr-beat'), 260);
+}
 function resetLyrics(key, title, artist) {
-  st.lyrics = { key: key || '', status: '', track: title || '', artist: artist || '', synced: [], plain: '', instrumental: false, offsetMs: 0 };
-  st.lyricsIdx = -1;
+  st.lyrics = { key: key || '', status: '', track: title || '', artist: artist || '', synced: [], plain: '', instrumental: false, timedMode: 'none', offsetMs: 0 };
+  st.lyricsIdx = -2;
   st.lyricsQueryOpen = false;
+  lyrWordEls = []; lyrWordBounds = []; lyrLastWord = -2;
   updateLyricUi();
 }
 function updateLyricUi() {
   const meta = $('.meta');
   const btn = $('#b-lyr');
   const l = st.lyrics || {};
-  const hasSync = !!(st.media.active && st.lyricsMode && l.key === st.media.key && Array.isArray(l.synced) && l.synced.length);
+  const hasSync = !!(st.media.active && !st.media.video && l.key === st.media.key && Array.isArray(l.synced) && l.synced.length);
   const canShow = !!(st.media.active && !st.media.video);
   if (btn) {
     btn.classList.toggle('hidden', !canShow);
     btn.classList.toggle('has-sync', hasSync);
     btn.classList.toggle('active', !!(st.stackOpen && st.stackKind === 'lyrics'));
   }
-  if (meta) meta.classList.toggle('has-lyric', !!(hasSync && (st.media.playing || st.lyricsIdx >= 0)));
+  if (meta) {
+    meta.classList.toggle('has-lyric', hasSync);
+    const mt = $('#m-title');
+    if (mt && st.media.active && !st.scrubbing) {
+      mt.textContent = hasSync && st.media.artist
+        ? `${st.media.title || 'Unknown'} · ${st.media.artist}`
+        : (st.media.title || 'Unknown title');
+    }
+  }
   if (hasSync) syncLyricLine(true);
 }
 function syncLyricLine(forceUi) {
   const l = st.lyrics;
-  if (!st.media.active || !st.lyricsMode || !l || l.key !== st.media.key || !l.synced.length) return;
+  if (!st.media.active || st.media.video || !l || l.key !== st.media.key || !l.synced.length) return;
   const off = Number(l.offsetMs) || 0;
   const pos = mediaPos();
-  let idx = -1;
   const arr = l.synced;
+  let idx = -1;
   for (let i = 0; i < arr.length; i++) {
     if (arr[i].ms + off <= pos) idx = i;
     else break;
   }
+  const curStart = idx >= 0 ? arr[idx].ms + off : 0;
+  const nextStart = idx + 1 < arr.length ? arr[idx + 1].ms + off : Math.max(curStart + 4200, st.media.dur || curStart + 4200);
+  const spanMs = Math.max(700, nextStart - curStart);
+
   if (idx !== st.lyricsIdx || forceUi) {
+    const changed = idx !== st.lyricsIdx;
     st.lyricsIdx = idx;
+    lyrLastWord = -2;
     const box = $('#m-lyric'), txt = $('#m-lyric-txt'), meta = $('.meta');
     if (meta) meta.classList.add('has-lyric');
     if (box && txt) {
       const rawLine = idx >= 0 ? (arr[idx].text || '').trim() : '';
       const isInst = !rawLine;
       box.classList.toggle('inst', isInst);
-      txt.textContent = isInst ? '♪ • • • ♪' : rawLine;
+      txt.textContent = '';
+      txt.style.transition = 'none';
       txt.style.transform = '';
-      if (!forceUi) {
-        txt.classList.remove('lyric-pop');
-        void txt.offsetWidth;
-        txt.classList.add('lyric-pop');
-      }
-      // Smoothly fit or marquee long lines
-      const overflow = txt.scrollWidth - box.clientWidth;
-      if (overflow > 6 && !isInst) {
-        const dur = clamp(overflow / 26, 2.2, 6.5).toFixed(2);
-        txt.style.transition = `transform ${dur}s linear 0.35s`;
-        requestAnimationFrame(() => { txt.style.transform = `translateX(${document.dir === 'rtl' || /[\u0600-\u06FF]/.test(rawLine) ? overflow : -overflow}px)`; });
+      lyrWordEls = [];
+      lyrWordBounds = [];
+
+      if (isInst) {
+        const w = document.createElement('span');
+        w.className = 'lyr-inst';
+        w.innerHTML = '<i></i><i></i><i></i>';
+        txt.appendChild(w);
       } else {
-        txt.style.transition = 'none';
+        const isRtl = /[\u0600-\u06FF\u0590-\u05FF]/.test(rawLine);
+        const lineWrap = document.createElement('span');
+        lineWrap.className = 'lyric-line';
+        lineWrap.dir = isRtl ? 'rtl' : 'ltr';
+        const words = rawLine.split(/\s+/).filter(Boolean);
+        let totalW = 0;
+        const weights = words.map((wd) => { const w = Math.max(2, wd.length + 1.8); totalW += w; return w; });
+        let acc = 0;
+        words.forEach((wd, wi) => {
+          const sp = document.createElement('span');
+          sp.className = 'lw';
+          sp.style.setProperty('--wi', wi);
+          sp.textContent = wd;
+          lineWrap.appendChild(sp);
+          lyrWordEls.push(sp);
+          acc += weights[wi];
+          lyrWordBounds.push(acc / Math.max(1, totalW));
+        });
+        txt.appendChild(lineWrap);
+
+        const overflow = txt.scrollWidth - box.clientWidth;
+        if (overflow > 6) {
+          const panSec = clamp((spanMs * 0.72) / 1000, 1.8, 6.2).toFixed(2);
+          txt.style.transition = `transform ${panSec}s linear 0.32s`;
+          requestAnimationFrame(() => {
+            txt.style.transform = `translateX(${isRtl ? overflow : -overflow}px)`;
+          });
+        }
+        if (changed && !forceUi && idx >= 0) {
+          artBeat();
+          if (typeof glPoke === 'function') glPoke(540);
+          if (typeof spawnLyricSparkle === 'function') spawnLyricSparkle();
+        }
       }
     }
     if (st.stackOpen && st.stackKind === 'lyrics') {
@@ -811,6 +864,24 @@ function syncLyricLine(forceUi) {
       }
     }
   }
+
+  // Real-time word-by-word karaoke sweep across the active lyric line
+  if (lyrWordEls.length) {
+    const prog = clamp((pos - curStart) / spanMs, 0, 0.999);
+    let activeW = 0;
+    for (let i = 0; i < lyrWordBounds.length; i++) {
+      if (prog <= lyrWordBounds[i]) { activeW = i; break; }
+      activeW = i;
+    }
+    if (activeW !== lyrLastWord || forceUi) {
+      lyrLastWord = activeW;
+      for (let i = 0; i < lyrWordEls.length; i++) {
+        const el = lyrWordEls[i];
+        el.classList.toggle('lit', i <= activeW);
+        el.classList.toggle('now', i === activeW);
+      }
+    }
+  }
 }
 function onLyrics(m) {
   if (!m || (st.media.key && m.key !== st.media.key)) return;
@@ -822,9 +893,11 @@ function onLyrics(m) {
     synced: Array.isArray(m.synced) ? m.synced : [],
     plain: m.plain || '',
     instrumental: !!m.instrumental,
+    timedMode: m.timedMode || 'none',
     offsetMs: Number(m.offsetMs) || 0,
   };
-  st.lyricsIdx = -1;
+  st.lyricsIdx = -2;
+  lyrLastWord = -2;
   updateLyricUi();
   render();
   if (st.stackOpen && st.stackKind === 'lyrics') renderLyrics();
@@ -1820,7 +1893,7 @@ const sfx = {
   },
 };
 
-const dragEchoes = [], edgeSweeps = [], slipstreams = [], impactBlooms = [], portalSlits = [];
+const dragEchoes = [], edgeSweeps = [], slipstreams = [], impactBlooms = [], portalSlits = [], lyricMotes = [];
 let dragGlowActive = false, dragGlowT = 0, suppressClickUntil = 0, mergePullActive = false, lastTopCleared = false;
 let liveDragMag = 0, liveDragHot = false, liveDragCharge = 0, liveAbsorbing = false, liveAbsorbP = 0, liveDirX = 0, liveDirY = 0, prevMergeHot = false;
 let liveApproachX = -1;
@@ -1859,6 +1932,25 @@ function pillGleam(mega = false) {
   island.classList.add(cls);
   clearTimeout(gleamT);
   gleamT = setTimeout(() => island.classList.remove('gleaming', 'gleaming-mega'), 720);
+}
+function spawnLyricSparkle() {
+  if (st.tucked || lyricMotes.length > 14) return;
+  const cols = themeCols();
+  const rect = island.getBoundingClientRect();
+  const rw = rect.width || island.clientWidth || 280;
+  const cx = rect.left ? rect.left + rw * 0.45 : FX_W / 2 - 20;
+  for (let i = 0; i < 4; i++) {
+    lyricMotes.push({
+      x: cx + (Math.random() - 0.5) * Math.min(180, rw * 0.55),
+      y: 26 + (Math.random() - 0.5) * 18,
+      vx: (Math.random() - 0.5) * 32,
+      vy: (Math.random() < 0.65 ? -1 : 1) * (16 + Math.random() * 24),
+      r: 1.4 + Math.random() * 1.4,
+      life: 1,
+      fade: 1.55 + Math.random() * 0.7,
+      col: i === 0 ? '#ffffff' : i % 2 ? cols.c3 : cols.c1,
+    });
+  }
 }
 function spawnPortalSlit(dir = 1, isMerge = false) {
   const cols = themeCols();
@@ -2130,6 +2222,26 @@ function drawTopFx(t, dt) {
       f.restore();
     }
   }
+
+  // 9) Kinetic Lyric Prismatic Floating Motes on line transitions
+  for (let i = lyricMotes.length - 1; i >= 0; i--) {
+    const m = lyricMotes[i];
+    m.life -= dt * m.fade;
+    m.x += m.vx * dt;
+    m.y += m.vy * dt;
+    m.vy *= Math.exp(-1.8 * dt);
+    if (m.life <= 0) { lyricMotes.splice(i, 1); continue; }
+    const a = Math.sin(clamp(m.life, 0, 1) * Math.PI);
+    f.save();
+    f.globalAlpha = a * 0.92;
+    f.fillStyle = m.col;
+    f.shadowColor = m.col;
+    f.shadowBlur = 9;
+    f.beginPath();
+    f.arc(m.x, m.y, m.r * (0.65 + 0.45 * a), 0, Math.PI * 2);
+    f.fill();
+    f.restore();
+  }
 }
 // ------------------------------------------------------------ WebGL2 Optical Liquid Glass Engine (Snell SDF refraction + RGB chromatic dispersion)
 const glassC = $('#glass-gl');
@@ -2299,6 +2411,10 @@ void main() {
   };
   glPoke(600);
 }
+if (glassC) {
+  glassC.addEventListener('webglcontextlost', (e) => { e.preventDefault(); glCtx = null; glProg = null; document.body.classList.remove('gl-glass-on'); });
+  glassC.addEventListener('webglcontextrestored', () => initGlassGL());
+}
 initGlassGL();
 function glUploadBackdrop(m) {
   if (!glCtx || !glTex || !m || !m.rgb || !m.w || !m.h) return;
@@ -2362,7 +2478,7 @@ let idleFrames = 0, lastT = 0, lastPaint = 0, lastLyrSyncT = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const playing = st.media.playing && musicOn();
-  const hasTopFx = !!(dragEchoes.length || edgeSweeps.length || slipstreams.length || impactBlooms.length || portalSlits.length || st.pillDrag || mergePullActive);
+  const hasTopFx = !!(dragEchoes.length || edgeSweeps.length || slipstreams.length || impactBlooms.length || portalSlits.length || lyricMotes.length || st.pillDrag || mergePullActive);
   const look = st.skin !== 'black' ? st.skin : playing && st.visuals && st.react ? 'sky' : null;
   if (look !== lookNow) {
     if (look && lookNow) skyA = Math.min(skyA, 0.2);
@@ -2373,7 +2489,7 @@ function frame(t) {
   skyA += ((look ? 1 : 0) - skyA) * 0.07;
   island.classList.toggle('sky', skyA > 0.4);
   paintSeek();
-  if (cur === 'media' && playing && t - lastLyrSyncT > 90) { lastLyrSyncT = t; syncLyricLine(false); }
+  if (cur === 'media' && playing && t - lastLyrSyncT > 55) { lastLyrSyncT = t; syncLyricLine(false); }
   const hasGlass = glassActive();
   const glAwake = hasGlass && (playing || t < glActiveUntil || hasTopFx || st.pillDrag || mergePullActive);
   if (!playing && energy < 0.004 && !hasTopFx && !glAwake) {
@@ -3238,7 +3354,6 @@ const SETTINGS_UI = [
   ['toggle', 'soundFx', 'Sound effects'],
   ['toggle', 'liquidGlass', 'Optical Liquid Glass lens refraction'],
   ['toggle', 'chameleonGlass', 'Adaptive chameleon glass tint'],
-  ['toggle', 'lyrics', 'Live synced song lyrics (LRCLIB)'],
   ['toggle', 'gameStealth', 'Smart fullscreen game stealth (Ctrl+Alt+G peek)'],
   ['toggle', 'agentPulse', 'Antigravity Agent pulse'],
   ['toggle', 'watchdogAlerts', 'Heavy render / build completion alerts'],
@@ -3308,11 +3423,11 @@ function renderSettings() {
       row.appendChild(seg);
     } else if (type === 'swatch') {
       const now = s[key] || a[0];
-      const name = document.createElement('span'); name.className = 'dim swn'; name.textContent = now === 'sky' ? 'Cover colours' : now === 'black' ? 'Black' : THEMES[now].name;
+      const name = document.createElement('span'); name.className = 'dim swn'; name.textContent = now === 'sky' ? 'Cover colours' : now === 'black' ? 'Black' : (THEMES[now] ? THEMES[now].name : 'Black');
       const box = document.createElement('div'); box.className = 'sws';
       for (const val of a) {
         const bt = document.createElement('button'); bt.className = 'sw-' + val + (val === now ? ' on' : '');
-        bt.title = val === 'sky' ? 'Violet night sky' : val === 'black' ? 'Plain black' : THEMES[val].name;
+        bt.title = val === 'sky' ? 'Violet night sky' : val === 'black' ? 'Plain black' : (THEMES[val] ? THEMES[val].name : val);
         bt.addEventListener('click', () => window.qazi.setSetting(key, val));
         box.appendChild(bt);
       }
@@ -3447,7 +3562,7 @@ const applySettings = (s) => {
   st.deviceAlerts = s.deviceAlerts !== false;
   st.shelfOn = s.shelf !== false;
   st.visuals = s.visuals !== false;
-  st.skin = ['nebula', 'crystal', 'ember', 'reactor', 'venom'].includes(s.skin) ? s.skin : 'black';
+  st.skin = ['liquid', 'nebula', 'crystal', 'ember', 'reactor', 'venom'].includes(s.skin) ? s.skin : 'black';
   st.musicTheme = THEMES[s.musicTheme] ? s.musicTheme : 'sky';
   st.smartCopy = s.smartCopy !== false;
   st.react = s.musicReact !== false;
@@ -3458,7 +3573,7 @@ const applySettings = (s) => {
   st.chameleonGlass = s.chameleonGlass !== false;
   st.persianHotkeys = s.persianHotkeys !== false;
   st.liquidGlass = s.liquidGlass !== false;
-  st.lyricsMode = s.lyrics !== false;
+  st.lyricsMode = true;
   if (!st.chameleonGlass) { document.body.classList.remove('bright-under'); document.documentElement.style.setProperty('--ch-r', '18'); document.documentElement.style.setProperty('--ch-g', '24'); document.documentElement.style.setProperty('--ch-b', '42'); }
   if (typeof updateLyricUi === 'function') updateLyricUi();
   if (typeof glPoke === 'function') glPoke(480);
