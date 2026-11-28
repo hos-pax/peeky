@@ -99,6 +99,15 @@ window.qazi = {
   copySecret: (text) => invoke('copy_secret', { text }),
   vaultReveal: (id) => invoke('vault_reveal', { id }),
   vaultRemove: (id) => invoke('vault_remove', { id }),
+
+  lyricsGet: (key, title, artist, durMs, force) => quiet(invoke('lyrics_get', { key, title, artist, durMs: Number(durMs) || 0, force: !!force })),
+  lyricsSearch: (query, durMs) => invoke('lyrics_search', { query, durMs: Number(durMs) || 0 }).catch(() => []),
+  lyricsPick: (key, id) => invoke('lyrics_pick', { key, id: Number(id) || 0 }).catch(() => false),
+  lyricsOffset: (key, offsetMs) => invoke('lyrics_offset', { key, offsetMs: Math.round(Number(offsetMs) || 0) }).catch(() => false),
+
+  audioOutputs: () => invoke('audio_outputs').catch(() => []),
+  audioSetOutput: (id) => invoke('audio_set_output', { id }).catch(() => false),
+  audioCycleOutput: () => invoke('audio_cycle_output').catch(() => ({ ok: false, devices: [] })),
 };
 window.addEventListener('error', (e) => quiet(invoke('debug_out', { text: '[page error] ' + e.message + ' @' + e.lineno })));
 })();

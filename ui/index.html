@@ -12,6 +12,7 @@
 <canvas id="fx" width="700" height="110"></canvas>
 
 <div id="island">
+  <canvas id="glass-gl"></canvas>
   <canvas id="sky"></canvas>
 
   <!-- idle: just the time (or a running countdown) -->
@@ -49,12 +50,14 @@
     <div class="meta">
       <div id="m-title">Nothing playing</div>
       <div id="m-artist"></div>
+      <div id="m-lyric" dir="auto"><span id="m-lyric-txt"></span></div>
     </div>
     <canvas id="bars" width="60" height="40"></canvas>
     <span id="m-timer"></span>
     <button class="ib" id="b-prev" data-icon="prev" title="Previous"></button>
     <button class="ib solid" id="b-play" data-icon="play" title="Play / Pause"></button>
     <button class="ib" id="b-next" data-icon="next" title="Next"></button>
+    <button class="ib small" id="b-lyr" data-icon="lyrics" title="Synced lyrics (scroll/click lines)"></button>
     <button class="ib small" id="b-more" data-icon="more" title="Main menu (stays until you switch back to the track)"></button>
   </div>
 
@@ -87,11 +90,12 @@
   </div>
 
   <!-- volume HUD -->
-  <div class="view" data-view="vol" title="Click to mute">
+  <div class="view" data-view="vol" title="Click to mute · click output chip to switch device">
     <span id="v-icon" class="glyph" data-icon="volume"></span>
     <span id="v-app" class="dim"></span>
     <div class="vbar"><i id="v-fill"></i></div>
     <b id="v-num">50</b>
+    <button class="vol-dev hidden" id="v-dev" title="Click to switch audio output (Headphones ⇄ Speakers)"><span id="v-dev-ico" class="glyph" data-icon="headphones"></span><span id="v-dev-name"></span></button>
   </div>
 
   <!-- compact game telemetry strip (Ctrl+Alt+G in fullscreen games) -->

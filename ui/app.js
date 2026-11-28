@@ -57,6 +57,8 @@ const ICONS = {
   monitor: `<rect ${S} x="3" y="4" width="18" height="12" rx="2.2"/><path ${S} d="M8 20h8M12 16v4"/>`,
   activity: `<path ${S} d="M3 12h4l2.5-6 4 12 2.5-6H21"/>`,
   wand: `<path ${S} d="M15 4l5 5L8 21l-5-5zM13 6l5 5"/>`,
+  lyrics: `<path ${S} d="M4 7h9M4 12h7M4 17h6M16.5 15V6l3.5-1v3"/><circle fill="currentColor" cx="14.5" cy="16.2" r="2.3"/>`,
+  speaker: `<rect ${S} x="5.5" y="3.5" width="13" height="17" rx="2.5"/><circle ${S} cx="12" cy="14" r="3.2"/><circle fill="currentColor" cx="12" cy="7.5" r="1.1"/>`,
 };
 const svg = (name) => `<svg viewBox="0 0 24 24">${ICONS[name] || ''}</svg>`;
 const setIcon = (el, name) => { if (el.dataset.cur !== name) { el.innerHTML = svg(name); el.dataset.cur = name; } };
@@ -98,6 +100,9 @@ const st = {
   telem: {}, agent: { state: 'idle' }, ambientMode: 'off', caches: null,
   smartCopy: true, hudAct: null, muteClipUntil: 0, react: true, soundFx: true,
   gameStealth: true, agentPulse: true, watchdogAlerts: true, chameleonGlass: true, persianHotkeys: true,
+  liquidGlass: true, lyricsMode: true,
+  lyrics: { key: '', status: '', track: '', artist: '', synced: [], plain: '', instrumental: false, offsetMs: 0 },
+  lyricsIdx: -1, lyricsUserScrollAt: 0, lyricsQueryOpen: false, outputs: [],
   onSecondary: false, monitorCount: 1, dualMonitors: false, secondaryAlwaysOpen: true, pillDrag: false,
 };
 // the window takes the mouse only while the cursor is on the island (or a text field is open)
@@ -149,8 +154,10 @@ function updateTuck() {
     glow.classList.toggle('off', tucked);
     if (tucked && st.hover) { st.hover = false; island.classList.remove('hover'); syncMouse(); }
     if (tucked) window.qazi.setPillWidth(0);
-    if (!tucked) evalHover(st.cx, st.cy);
+    if (!tucked) { evalHover(st.cx, st.cy); if (typeof glPoke === 'function') glPoke(480); }
   }
+  const lyrBtn = $('#b-lyr');
+  if (lyrBtn) lyrBtn.classList.toggle('active', !!(st.stackOpen && st.stackKind === 'lyrics'));
 }
 function render() {
   // nothing closes while a file is on its way out, while typing, or right after it was opened from the tray / a shortcut
@@ -182,6 +189,7 @@ function render() {
     island.style.width = w + 'px';
     glow.style.width = w + 50 + 'px'; glow.style.marginLeft = -(w + 50) / 2 + 'px';
     window.qazi.setPillWidth(w);
+    if (typeof glPoke === 'function') glPoke(480);
     if (sideN) placeSide();
   }
 }
@@ -201,11 +209,15 @@ window.qazi.onCursor(({ x, y }) => {
   if (!st.tucked) {
     const r = island.getBoundingClientRect();
     if (r.width > 10) {
-      island.style.setProperty('--mx', clamp(((x - r.left) / r.width) * 100, 0, 100).toFixed(1) + '%');
-      island.style.setProperty('--my', clamp(((y - r.top) / r.height) * 100, 0, 100).toFixed(1) + '%');
+      const mx = clamp((x - r.left) / r.width, 0, 1);
+      const my = clamp((y - r.top) / r.height, 0, 1);
+      island.style.setProperty('--mx', (mx * 100).toFixed(1) + '%');
+      island.style.setProperty('--my', (my * 100).toFixed(1) + '%');
+      if (typeof glSetMouse === 'function') glSetMouse(mx, my);
     }
     const dx = x - (r.left + r.right) / 2, dy = y - (r.top + r.bottom) / 2;
     cursorInsideNear = Math.hypot(dx, dy) < 260;
+    if (cursorInsideNear && typeof glPoke === 'function') glPoke(280);
     if (cur === 'idle' && st.face === 'eyes' && !st.pillDrag && !mergePullActive && Math.hypot(dx, dy) < 170) {
       const mx = x - shakeLastX;
       if (Math.abs(mx) > 10) {
@@ -519,6 +531,7 @@ function renderStack() {
   if (st.stackKind === 'speedo') { renderSpeedo(); return; }
   if (st.stackKind === 'watchdog') { renderWatchdog(); return; }
   if (st.stackKind === 'agy') { renderAgyHub(); return; }
+  if (st.stackKind === 'lyrics') { renderLyrics(); return; }
   if (st.stackKind === 'tour') { renderTour(); return; }
   $('#stack-clear').textContent = 'Clear all';
   $('#stack-clear').classList.toggle('hidden', !st.history.length);
@@ -697,6 +710,7 @@ $('#t-shelf').addEventListener('dragstart', (e) => { e.preventDefault(); window.
 const DEFAULT_PAL = ['#1f0e6b', '#33199a', '#4c2cbf'];     // dark violet night sky (deep enough that white text stays easy to read)
 // Skins: animated surfaces the pill can wear. At rest they move slowly; with music they react to the sound.
 const THEMES = {
+  liquid: { name: 'Liquid Glass', pal: ['#38bdf8', '#818cf8', '#e879f9'] },
   nebula: { name: 'Nebula', pal: ['#7a1fd1', '#c0269a', '#ff4f9a'] },
   crystal: { name: 'Sapphire', pal: ['#2b36d9', '#5a48f0', '#9a6bff'] },
   ember: { name: 'Ember', pal: ['#a8081d', '#dc1230', '#ff4a3d'] },
@@ -724,6 +738,247 @@ function setArt(b64) {
   img.onerror = () => setArt(null);
   img.src = url;
 }
+// ------------------------------------------------------------ synced song lyrics (LRCLIB)
+function fmtLyrT(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60);
+  return m + ':' + String(s % 60).padStart(2, '0');
+}
+function resetLyrics(key, title, artist) {
+  st.lyrics = { key: key || '', status: '', track: title || '', artist: artist || '', synced: [], plain: '', instrumental: false, offsetMs: 0 };
+  st.lyricsIdx = -1;
+  st.lyricsQueryOpen = false;
+  updateLyricUi();
+}
+function updateLyricUi() {
+  const meta = $('.meta');
+  const btn = $('#b-lyr');
+  const l = st.lyrics || {};
+  const hasSync = !!(st.media.active && st.lyricsMode && l.key === st.media.key && Array.isArray(l.synced) && l.synced.length);
+  const canShow = !!(st.media.active && !st.media.video);
+  if (btn) {
+    btn.classList.toggle('hidden', !canShow);
+    btn.classList.toggle('has-sync', hasSync);
+    btn.classList.toggle('active', !!(st.stackOpen && st.stackKind === 'lyrics'));
+  }
+  if (meta) meta.classList.toggle('has-lyric', !!(hasSync && (st.media.playing || st.lyricsIdx >= 0)));
+  if (hasSync) syncLyricLine(true);
+}
+function syncLyricLine(forceUi) {
+  const l = st.lyrics;
+  if (!st.media.active || !st.lyricsMode || !l || l.key !== st.media.key || !l.synced.length) return;
+  const off = Number(l.offsetMs) || 0;
+  const pos = mediaPos();
+  let idx = -1;
+  const arr = l.synced;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i].ms + off <= pos) idx = i;
+    else break;
+  }
+  if (idx !== st.lyricsIdx || forceUi) {
+    st.lyricsIdx = idx;
+    const box = $('#m-lyric'), txt = $('#m-lyric-txt'), meta = $('.meta');
+    if (meta) meta.classList.add('has-lyric');
+    if (box && txt) {
+      const rawLine = idx >= 0 ? (arr[idx].text || '').trim() : '';
+      const isInst = !rawLine;
+      box.classList.toggle('inst', isInst);
+      txt.textContent = isInst ? '♪ • • • ♪' : rawLine;
+      txt.style.transform = '';
+      if (!forceUi) {
+        txt.classList.remove('lyric-pop');
+        void txt.offsetWidth;
+        txt.classList.add('lyric-pop');
+      }
+      // Smoothly fit or marquee long lines
+      const overflow = txt.scrollWidth - box.clientWidth;
+      if (overflow > 6 && !isInst) {
+        const dur = clamp(overflow / 26, 2.2, 6.5).toFixed(2);
+        txt.style.transition = `transform ${dur}s linear 0.35s`;
+        requestAnimationFrame(() => { txt.style.transform = `translateX(${document.dir === 'rtl' || /[\u0600-\u06FF]/.test(rawLine) ? overflow : -overflow}px)`; });
+      } else {
+        txt.style.transition = 'none';
+      }
+    }
+    if (st.stackOpen && st.stackKind === 'lyrics') {
+      const rows = [...stackList.querySelectorAll('.row.lyr')];
+      rows.forEach((row, rIdx) => {
+        row.classList.toggle('active', rIdx === idx);
+        row.classList.toggle('past', rIdx < idx);
+      });
+      if (idx >= 0 && rows[idx] && Date.now() - st.lyricsUserScrollAt > 3500) {
+        const targetTop = Math.max(0, rows[idx].offsetTop - stackList.clientHeight * 0.42);
+        stackList.scrollTo({ top: targetTop, behavior: forceUi ? 'auto' : 'smooth' });
+      }
+    }
+  }
+}
+function onLyrics(m) {
+  if (!m || (st.media.key && m.key !== st.media.key)) return;
+  st.lyrics = {
+    key: m.key || '',
+    status: m.status || '',
+    track: m.track || st.media.title || '',
+    artist: m.artist || st.media.artist || '',
+    synced: Array.isArray(m.synced) ? m.synced : [],
+    plain: m.plain || '',
+    instrumental: !!m.instrumental,
+    offsetMs: Number(m.offsetMs) || 0,
+  };
+  st.lyricsIdx = -1;
+  updateLyricUi();
+  render();
+  if (st.stackOpen && st.stackKind === 'lyrics') renderLyrics();
+}
+let lyrScrollHooked = false, lyrSearchResults = null, lyrSearchBusy = false;
+function renderLyrics() {
+  $('#stack-clear').classList.add('hidden');
+  if (!lyrScrollHooked) {
+    lyrScrollHooked = true;
+    stackList.addEventListener('wheel', () => { if (st.stackKind === 'lyrics') st.lyricsUserScrollAt = Date.now(); }, { passive: true });
+    stackList.addEventListener('pointerdown', () => { if (st.stackKind === 'lyrics') st.lyricsUserScrollAt = Date.now(); });
+  }
+  const prevScroll = stackList.scrollTop;
+  stackList.textContent = '';
+
+  const l = st.lyrics || {};
+  const bar = document.createElement('div'); bar.className = 'lyr-bar';
+  const meta = document.createElement('span'); meta.className = 'lyr-meta'; meta.dir = 'auto';
+  meta.textContent = l.track || st.media.title || 'Lyrics';
+  bar.appendChild(meta);
+
+  if (l.synced && l.synced.length) {
+    const nudgeOff = (delta) => {
+      const next = clamp((Number(l.offsetMs) || 0) + delta, -30000, 30000);
+      l.offsetMs = next;
+      window.qazi.lyricsOffset(l.key, next);
+      syncLyricLine(true);
+      renderLyrics();
+    };
+    const bMinus = document.createElement('button'); bMinus.className = 'lyr-chip'; bMinus.textContent = '-0.5s'; bMinus.title = 'Lyrics appear 0.5s earlier';
+    bMinus.addEventListener('click', () => nudgeOff(-500));
+    const offLbl = document.createElement('span'); offLbl.className = 'lyr-off';
+    const sec = (Number(l.offsetMs) || 0) / 1000;
+    offLbl.textContent = (sec > 0 ? '+' : '') + sec.toFixed(1) + 's';
+    const bPlus = document.createElement('button'); bPlus.className = 'lyr-chip'; bPlus.textContent = '+0.5s'; bPlus.title = 'Lyrics appear 0.5s later';
+    bPlus.addEventListener('click', () => nudgeOff(500));
+    bar.append(bMinus, offLbl, bPlus);
+  }
+
+  if (st.outputs.length >= 2) {
+    const curDev = st.outputs.find((d) => d.isDefault) || st.outputs[0];
+    const bDev = document.createElement('button'); bDev.className = 'lyr-chip blue';
+    bDev.title = `${curDev ? curDev.name : 'Output'} — Switch audio output`;
+    bDev.innerHTML = svg(curDev && curDev.kind === 'headphones' ? 'headphones' : 'speaker');
+    bDev.addEventListener('click', () => {
+      sfx.tick();
+      window.qazi.audioCycleOutput().then((res) => { if (res && res.devices) { st.outputs = res.devices; paintVolDev(); renderLyrics(); } });
+    });
+    bar.appendChild(bDev);
+  }
+
+  const bSearch = document.createElement('button'); bSearch.className = 'lyr-chip'; bSearch.title = 'Search another lyrics version';
+  bSearch.innerHTML = svg('search');
+  bSearch.addEventListener('click', () => {
+    st.lyricsQueryOpen = !st.lyricsQueryOpen;
+    if (!st.lyricsQueryOpen) lyrSearchResults = null;
+    renderLyrics();
+  });
+  bar.appendChild(bSearch);
+  stackList.appendChild(bar);
+
+  if (st.lyricsQueryOpen) {
+    const qRow = document.createElement('div'); qRow.className = 'lyr-q';
+    const inp = document.createElement('input'); inp.type = 'text'; inp.dir = 'auto'; inp.spellcheck = false;
+    inp.placeholder = 'Search song / artist on LRCLIB…';
+    inp.value = `${st.media.artist ? st.media.artist + ' ' : ''}${st.media.title || ''}`.trim();
+    inp.addEventListener('focus', () => holdKeys());
+    inp.addEventListener('blur', () => releaseKeys(false));
+    const go = document.createElement('button'); go.className = 'lyr-chip blue'; go.textContent = lyrSearchBusy ? '…' : 'Find';
+    const runSearch = async () => {
+      const q = inp.value.trim();
+      if (!q || lyrSearchBusy) return;
+      lyrSearchBusy = true; renderLyrics();
+      lyrSearchResults = await window.qazi.lyricsSearch(q, Number(st.media.dur) || 0);
+      lyrSearchBusy = false; renderLyrics();
+    };
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+      else if (e.key === 'Escape') { e.preventDefault(); releaseKeys(false); st.lyricsQueryOpen = false; lyrSearchResults = null; renderLyrics(); }
+    });
+    go.addEventListener('click', runSearch);
+    qRow.append(inp, go);
+    stackList.appendChild(qRow);
+    setTimeout(() => inp.focus(), 20);
+  }
+
+  if (Array.isArray(lyrSearchResults)) {
+    if (!lyrSearchResults.length) {
+      const em = document.createElement('div'); em.className = 'row empty wide'; em.textContent = 'No LRCLIB results — try simpler English/Persian keywords';
+      stackList.appendChild(em);
+      return;
+    }
+    lyrSearchResults.forEach((c) => {
+      const r = document.createElement('div'); r.className = 'row wd'; r.style.cursor = 'pointer';
+      const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.dir = 'auto';
+      lbl.textContent = `${c.hasSynced ? '♪ ' : ''}${c.artist} — ${c.track} (${fmtLyrT((c.durSec || 0) * 1000)})`;
+      const pk = document.createElement('button'); pk.className = 'go'; pk.textContent = 'Use';
+      r.addEventListener('click', async () => {
+        lyrSearchResults = null; st.lyricsQueryOpen = false;
+        await window.qazi.lyricsPick(st.media.key, c.id);
+      });
+      r.append(lbl, pk);
+      stackList.appendChild(r);
+    });
+    return;
+  }
+
+  if (!st.media.active) {
+    const e = document.createElement('div'); e.className = 'row empty wide'; e.textContent = 'Play a song to view live synced lyrics';
+    stackList.appendChild(e); return;
+  }
+  if (l.status === 'loading') {
+    const e = document.createElement('div'); e.className = 'row empty wide'; e.textContent = 'Fetching synced lyrics from LRCLIB…';
+    stackList.appendChild(e); return;
+  }
+  if (l.synced && l.synced.length) {
+    const curIdx = st.lyricsIdx;
+    l.synced.forEach((line, i) => {
+      const r = document.createElement('div');
+      r.className = 'row lyr' + (i === curIdx ? ' active' : i < curIdx ? ' past' : '');
+      const tEl = document.createElement('span'); tEl.className = 'lyr-t';
+      tEl.textContent = fmtLyrT(line.ms + (Number(l.offsetMs) || 0));
+      const txEl = document.createElement('span'); txEl.className = 'lyr-txt'; txEl.dir = 'auto';
+      txEl.textContent = line.text.trim() ? line.text : '• • •';
+      r.append(tEl, txEl);
+      if (st.media.canSeek) {
+        r.title = 'Click to jump here';
+        r.addEventListener('click', () => {
+          const targetMs = Math.max(0, line.ms + (Number(l.offsetMs) || 0));
+          st.media.pos = targetMs; st.media.at = performance.now(); st.seekAt = Date.now();
+          st.lyricsUserScrollAt = 0;
+          window.qazi.seek(targetMs);
+          syncLyricLine(true);
+        });
+      }
+      stackList.appendChild(r);
+    });
+    if (curIdx >= 0 && Date.now() - st.lyricsUserScrollAt > 3500) {
+      const rows = stackList.querySelectorAll('.row.lyr');
+      if (rows[curIdx]) stackList.scrollTop = Math.max(0, rows[curIdx].offsetTop - stackList.clientHeight * 0.42);
+    } else {
+      stackList.scrollTop = prevScroll;
+    }
+    return;
+  }
+  if (l.plain) {
+    const p = document.createElement('div'); p.className = 'row lyr-plain'; p.dir = 'auto'; p.textContent = l.plain;
+    stackList.appendChild(p); return;
+  }
+  const msg = document.createElement('div'); msg.className = 'row empty wide';
+  msg.textContent = l.instrumental ? '♪ Instrumental track' : 'No lyrics matched yet — tap 🔍 above to search';
+  stackList.appendChild(msg);
+}
+
 // Films and series are not "now playing" material: the player says so (kind), or it is a known video app.
 const VIDEO_APPS = /vlc|mpv|mpc-hc|mpc-be|potplayer|kmplayer|smplayer|gomplayer|zunevideo|netflix|primevideo|disney|plex|kodi|stremio|filimo|namava|aparat/i;
 function onMedia(m) {
@@ -731,12 +986,18 @@ function onMedia(m) {
   if (!m.active) {
     st.media = { active: false, playing: false, title: '', artist: '', pos: 0, dur: 0, at: 0, key: '', video: false };
     setArt(null);
+    resetLyrics('', '', '');
   } else {
     const justSeeked = Date.now() - (st.seekAt || 0) < 1500 && m.key === was.key;     // the player has not caught up yet
     st.media = { ...m, at: performance.now(), video: m.kind === 'Video' || VIDEO_APPS.test(m.app || '') };
     if (justSeeked) { st.media.pos = was.pos; st.media.at = was.at; }
     $('#m-title').textContent = m.title || 'Unknown title';
     if (!st.scrubbing) $('#m-artist').textContent = m.artist || '';
+    if (m.key !== was.key) {
+      resetLyrics(m.key, m.title, m.artist);
+      lyrSearchResults = null;
+      if (st.lyricsMode) window.qazi.lyricsGet(m.key, m.title || '', m.artist || '', Number(m.dur) || 0, false);
+    }
     if (musicOn()) {
       if (m.key !== was.key && m.playing && !st.menuMode) { st.revealUntil = Date.now() + 3000; if (was.key) bump(); }   // announce the new track
     }
@@ -746,6 +1007,7 @@ function onMedia(m) {
   setIcon($('#b-play'), icon); setIcon($('#t-play'), icon);
   $('#t-play').classList.toggle('hidden', !st.media.active);
   $('#t-track').classList.toggle('hidden', !(st.menuMode && musicOn()));
+  updateLyricUi();
   render();
 }
 function setMenuMode(on) {
@@ -765,11 +1027,66 @@ $('#b-play').addEventListener('click', optimisticToggle);
 $('#t-play').addEventListener('click', optimisticToggle);
 $('#b-next').addEventListener('click', () => window.qazi.media('next'));
 $('#b-prev').addEventListener('click', () => window.qazi.media('prev'));
+$('#b-lyr').addEventListener('click', () => {
+  st.holdUntil = Date.now() + 5000;
+  const open = st.stackOpen && st.stackKind === 'lyrics';
+  if (open) setStack(false);
+  else {
+    if (st.media.active && !st.lyrics.synced.length && !st.lyrics.plain && st.lyrics.status !== 'loading') {
+      window.qazi.lyricsGet(st.media.key, st.media.title || '', st.media.artist || '', Number(st.media.dur) || 0, true);
+    }
+    setStack(true, 'lyrics');
+  }
+  updateLyricUi();
+});
+$('#m-lyric').addEventListener('click', () => {
+  st.holdUntil = Date.now() + 5000;
+  setStack(!(st.stackOpen && st.stackKind === 'lyrics'), 'lyrics');
+  updateLyricUi();
+});
 $('#b-more').addEventListener('click', () => setMenuMode(true));
 $('#t-track').addEventListener('click', () => { setStack(false); setMenuMode(false); });
 setArt(null);
 
-// ------------------------------------------------------------ volume HUD (instant native hover-scroll + fallback wheel)
+// ------------------------------------------------------------ volume HUD & instant output switcher
+let outRefreshAt = 0;
+function paintVolDev() {
+  const btn = $('#v-dev');
+  if (!btn) return;
+  const curOut = st.outputs.find((d) => d.isDefault) || st.outputs[0];
+  if (!curOut || st.outputs.length < 2) { btn.classList.add('hidden'); return; }
+  btn.classList.remove('hidden');
+  const ico = curOut.kind === 'headphones' ? 'headphones' : curOut.kind === 'bluetooth' ? 'bluetooth' : curOut.kind === 'display' ? 'monitor' : 'speaker';
+  setIcon($('#v-dev-ico'), ico);
+  $('#v-dev-name').textContent = curOut.name;
+  btn.title = `${curOut.fullName || curOut.name} — Click to switch audio output`;
+}
+function ensureOutputs(force) {
+  const now = Date.now();
+  if (!force && now - outRefreshAt < 4500 && st.outputs.length) return;
+  outRefreshAt = now;
+  window.qazi.audioOutputs().then((list) => {
+    if (Array.isArray(list)) {
+      st.outputs = list;
+      paintVolDev();
+      if (st.stackOpen && st.stackKind === 'lyrics') renderLyrics();
+    }
+  });
+}
+ensureOutputs(true);
+$('#v-dev').addEventListener('click', (e) => {
+  e.stopPropagation();
+  st.volUntil = Date.now() + 2600;
+  sfx.tick();
+  window.qazi.audioCycleOutput().then((res) => {
+    if (res && Array.isArray(res.devices)) {
+      st.outputs = res.devices;
+      paintVolDev();
+      pillGleam(false);
+    }
+    render();
+  });
+});
 function paintVol() {
   const va = $('#v-app');
   if (va) va.textContent = st.volApp || '';
@@ -777,6 +1094,8 @@ function paintVol() {
   $('#v-num').textContent = (st.mute ? '0' : st.vol) + (st.volApp ? '%' : '');
   const ic = st.mute || st.vol === 0 ? 'muted' : 'volume';
   setIcon($('#v-icon'), ic);
+  ensureOutputs(false);
+  paintVolDev();
 }
 views.vol.addEventListener('click', () => { st.volUntil = Date.now() + 1500; window.qazi.toggleMute(); });
 let wheelAcc = 0, volSendT = 0;
@@ -853,6 +1172,14 @@ window.qazi.onHelper((m) => {
     r.setProperty('--ch-r', m.rgb[0]); r.setProperty('--ch-g', m.rgb[1]); r.setProperty('--ch-b', m.rgb[2]);
     r.setProperty('--ch-luma', m.luma || 0.2);
     document.body.classList.toggle('bright-under', (m.luma || 0) > 0.58);
+    if (typeof glSetChroma === 'function') glSetChroma(m.rgb, m.luma || 0.2);
+  }
+  else if (m.t === 'backdrop') { if (typeof glUploadBackdrop === 'function') glUploadBackdrop(m); }
+  else if (m.t === 'lyrics') onLyrics(m);
+  else if (m.t === 'audio-outputs' && Array.isArray(m.devices)) {
+    st.outputs = m.devices;
+    paintVolDev();
+    if (st.stackOpen && st.stackKind === 'lyrics') renderLyrics();
   }
   else if (m.t === 'telemetry') {
     st.telem = m;
@@ -1091,6 +1418,7 @@ function paintLiquid(g, t, x0, x1, W, A, P) {
 }
 const PAINT = {
   sky: paintSky,
+  liquid() {},
   // a rich dark frosted galaxy: clouds of magenta and violet drifting over ~72% frosted glass
   nebula(g, t, dt, x0, x1, W, A) {
     g.globalAlpha = A; g.fillStyle = 'rgba(8, 4, 15, 0.72)'; g.fillRect(x0, 0, W, SKY_H);
@@ -1803,7 +2131,234 @@ function drawTopFx(t, dt) {
     }
   }
 }
-let idleFrames = 0, lastT = 0, lastPaint = 0;
+// ------------------------------------------------------------ WebGL2 Optical Liquid Glass Engine (Snell SDF refraction + RGB chromatic dispersion)
+const glassC = $('#glass-gl');
+let glCtx = null, glProg = null, glTex = null, glUni = null;
+let glActiveUntil = 0, glCleared = false;
+let glMouseX = 0.5, glMouseY = 0.2, glSmx = 0.5, glSmy = 0.2, glMode = 0.0;
+let glChR = 18 / 255, glChG = 24 / 255, glChB = 42 / 255, glLuma = 0.2;
+let glPal = [[0.22, 0.74, 0.97], [0.51, 0.55, 0.97], [0.91, 0.47, 0.98]];
+function hexToRgb01(h) {
+  const n = parseInt(String(h || '#38bdf8').replace('#', ''), 16) || 0x38bdf8;
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+function glPoke(ms) { glActiveUntil = Math.max(glActiveUntil, performance.now() + (ms || 420)); }
+function glSetMouse(mx, my) { glMouseX = mx; glMouseY = my; }
+function glSetChroma(rgb, luma) {
+  glChR = clamp((rgb[0] || 0) / 255, 0, 1);
+  glChG = clamp((rgb[1] || 0) / 255, 0, 1);
+  glChB = clamp((rgb[2] || 0) / 255, 0, 1);
+  glLuma = clamp(Number(luma) || 0.2, 0, 1);
+  glPoke(420);
+}
+function initGlassGL() {
+  if (!glassC) return;
+  const g = glassC.getContext('webgl2', { alpha: true, premultipliedAlpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'low-power' });
+  if (!g) return;
+  const vsSrc = `#version 300 es
+precision highp float;
+const vec2 P[3] = vec2[](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
+out vec2 v_uv;
+void main() {
+  vec2 p = P[gl_VertexID];
+  v_uv = p * 0.5 + 0.5;
+  v_uv.y = 1.0 - v_uv.y;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+  const fsSrc = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 o_col;
+uniform sampler2D u_tex;
+uniform vec2 u_res;
+uniform vec2 u_mouse;
+uniform vec3 u_pal0;
+uniform vec3 u_pal1;
+uniform vec3 u_pal2;
+uniform vec3 u_ch;
+uniform float u_luma;
+uniform float u_time;
+uniform float u_bass;
+uniform float u_drag;
+uniform float u_mode;
+
+float sdCapsule(vec2 p, vec2 res) {
+  float r = min(res.x, res.y) * 0.5;
+  vec2 b = max(res * 0.5 - vec2(r), vec2(0.0));
+  vec2 q = abs(p) - b;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+vec3 sampleBlur(vec2 uv) {
+  vec2 px = vec2(0.045, 0.14);
+  vec3 c = texture(u_tex, uv).rgb * 0.36;
+  c += texture(u_tex, clamp(uv + vec2( px.x,  px.y), 0.01, 0.99)).rgb * 0.16;
+  c += texture(u_tex, clamp(uv + vec2(-px.x,  px.y), 0.01, 0.99)).rgb * 0.16;
+  c += texture(u_tex, clamp(uv + vec2( px.x, -px.y), 0.01, 0.99)).rgb * 0.16;
+  c += texture(u_tex, clamp(uv + vec2(-px.x, -px.y), 0.01, 0.99)).rgb * 0.16;
+  return c;
+}
+
+void main() {
+  vec2 p = (v_uv - 0.5) * u_res;
+  float d = sdCapsule(p, u_res);
+  float mask = smoothstep(0.9, -0.7, d);
+  if (mask <= 0.001) discard;
+
+  vec2 eps = vec2(1.1, 0.0);
+  vec2 n = normalize(vec2(
+    sdCapsule(p + eps.xy, u_res) - sdCapsule(p - eps.xy, u_res),
+    sdCapsule(p + eps.yx, u_res) - sdCapsule(p - eps.yx, u_res)
+  ) + vec2(1e-4));
+
+  float edge = clamp(-d / 10.5, 0.0, 1.0);
+  float dome = 1.0 - edge;
+  float sq = dome * dome;
+
+  float asp = max(u_res.x / max(u_res.y, 1.0), 1.0);
+  vec2 mDelta = (v_uv - clamp(u_mouse, 0.0, 1.0)) * vec2(asp, 1.0);
+  float mDist = length(mDelta);
+  float mGlow = exp(-mDist * mDist * 3.4);
+
+  vec2 wave = vec2(
+    sin(p.x * 0.055 + u_time * 1.4) * cos(p.y * 0.15 - u_time * 1.05),
+    cos(p.x * 0.048 - u_time * 1.15) * sin(p.y * 0.17 + u_time * 1.3)
+  ) * (0.3 + 0.9 * u_mode + 0.8 * mGlow + 1.1 * u_bass);
+
+  float refrAmt = sq * (0.048 + 0.036 * u_mode + 0.025 * u_drag + 0.016 * u_bass);
+  vec2 baseUv = clamp(v_uv - n * refrAmt + wave * 0.0045, 0.015, 0.985);
+  float disp = (0.0055 + 0.0115 * u_mode + 0.007 * u_drag) * (0.28 + 0.72 * dome);
+
+  vec3 refrCol = vec3(
+    sampleBlur(baseUv + n * disp).r,
+    sampleBlur(baseUv).g,
+    sampleBlur(baseUv - n * disp).b
+  );
+
+  // Dark frosted obsidian core keeps white UI & glowing text legible on bright screens
+  vec3 obsidian = vec3(0.024, 0.032, 0.058) + u_ch * (0.06 + 0.08 * dome);
+  float darkCore = mix(0.74, 0.56, sq) - 0.11 * u_mode + clamp(u_luma - 0.45, 0.0, 0.55) * 0.22;
+  vec3 col = mix(refrCol * 0.88 + vec3(0.015), obsidian, clamp(darkCore, 0.42, 0.88));
+
+  // Prismatic edge dispersion & caustic accent gradient
+  float gradT = clamp(v_uv.x + 0.16 * sin(u_time * 0.55 + p.x * 0.018), 0.0, 1.0);
+  vec3 prism = mix(u_pal0, mix(u_pal1, u_pal2, gradT), gradT);
+  float fresnel = pow(dome, 2.35) * (0.22 + 0.36 * mGlow + 0.36 * u_mode + 0.16 * u_bass);
+  col += prism * fresnel * 0.72;
+
+  // Specular top bevel sheen & subtle mouse rim glint
+  float rimLine = smoothstep(2.0, 0.0, abs(d + 0.95));
+  float topBevel = smoothstep(0.62, 0.0, v_uv.y);
+  col += vec3(0.86, 0.94, 1.0) * rimLine * (0.18 * topBevel + 0.28 * mGlow + 0.12 * u_mode);
+
+  float alpha = mix(0.84, 0.72, u_mode * 0.65) + 0.12 * sq + clamp(u_luma - 0.5, 0.0, 0.5) * 0.14;
+  o_col = vec4(col, clamp(alpha, 0.64, 0.95) * mask);
+}`;
+  const compile = (type, src) => {
+    const sh = g.createShader(type);
+    g.shaderSource(sh, src);
+    g.compileShader(sh);
+    if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) { g.deleteShader(sh); return null; }
+    return sh;
+  };
+  const vs = compile(g.VERTEX_SHADER, vsSrc);
+  const fs = compile(g.FRAGMENT_SHADER, fsSrc);
+  if (!vs || !fs) return;
+  const prog = g.createProgram();
+  g.attachShader(prog, vs); g.attachShader(prog, fs); g.linkProgram(prog);
+  g.deleteShader(vs); g.deleteShader(fs);
+  if (!g.getProgramParameter(prog, g.LINK_STATUS)) { g.deleteProgram(prog); return; }
+
+  const tex = g.createTexture();
+  g.bindTexture(g.TEXTURE_2D, tex);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+  const seed = new Uint8Array([
+    16, 22, 42, 22, 34, 62, 36, 44, 78, 18, 26, 48,
+    12, 16, 30, 26, 28, 52, 32, 38, 68, 14, 20, 38,
+  ]);
+  g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+  g.texImage2D(g.TEXTURE_2D, 0, g.RGB, 4, 2, 0, g.RGB, g.UNSIGNED_BYTE, seed);
+
+  glCtx = g; glProg = prog; glTex = tex;
+  glUni = {
+    tex: g.getUniformLocation(prog, 'u_tex'),
+    res: g.getUniformLocation(prog, 'u_res'),
+    mouse: g.getUniformLocation(prog, 'u_mouse'),
+    pal0: g.getUniformLocation(prog, 'u_pal0'),
+    pal1: g.getUniformLocation(prog, 'u_pal1'),
+    pal2: g.getUniformLocation(prog, 'u_pal2'),
+    ch: g.getUniformLocation(prog, 'u_ch'),
+    luma: g.getUniformLocation(prog, 'u_luma'),
+    time: g.getUniformLocation(prog, 'u_time'),
+    bass: g.getUniformLocation(prog, 'u_bass'),
+    drag: g.getUniformLocation(prog, 'u_drag'),
+    mode: g.getUniformLocation(prog, 'u_mode'),
+  };
+  glPoke(600);
+}
+initGlassGL();
+function glUploadBackdrop(m) {
+  if (!glCtx || !glTex || !m || !m.rgb || !m.w || !m.h) return;
+  try {
+    const bin = atob(m.rgb);
+    const len = m.w * m.h * 3;
+    if (bin.length < len) return;
+    const arr = new Uint8Array(len);
+    for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+    glCtx.bindTexture(glCtx.TEXTURE_2D, glTex);
+    glCtx.pixelStorei(glCtx.UNPACK_ALIGNMENT, 1);
+    glCtx.texImage2D(glCtx.TEXTURE_2D, 0, glCtx.RGB, m.w, m.h, 0, glCtx.RGB, glCtx.UNSIGNED_BYTE, arr);
+    glPoke(460);
+  } catch { /* ignore malformed backdrop chunk */ }
+}
+function glassActive() {
+  return !!(glCtx && glProg && !st.tucked && !aura && (st.liquidGlass || lookNow === 'liquid'));
+}
+function drawGlassGL(t, dt) {
+  const on = glassActive();
+  document.body.classList.toggle('gl-glass-on', on);
+  if (!on) {
+    if (!glCleared && glCtx) { glCtx.clearColor(0, 0, 0, 0); glCtx.clear(glCtx.COLOR_BUFFER_BIT); glCleared = true; }
+    return;
+  }
+  glCleared = false;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(70, island.clientWidth), h = Math.max(30, island.clientHeight);
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (glassC.width !== bw || glassC.height !== bh) { glassC.width = bw; glassC.height = bh; }
+  const g = glCtx;
+  g.viewport(0, 0, bw, bh);
+  g.clearColor(0, 0, 0, 0);
+  g.clear(g.COLOR_BUFFER_BIT);
+  glSmx += (glMouseX - glSmx) * Math.min(1, dt * 12 + 0.14);
+  glSmy += (glMouseY - glSmy) * Math.min(1, dt * 12 + 0.14);
+  const targetMode = lookNow === 'liquid' ? 1.0 : 0.0;
+  glMode += (targetMode - glMode) * Math.min(1, dt * 8 + 0.12);
+  const pSrc = (THEMES[lookNow] && THEMES[lookNow].pal) ? THEMES[lookNow].pal : ['#38bdf8', '#818cf8', '#e879f9'];
+  glPal = [hexToRgb01(pSrc[0]), hexToRgb01(pSrc[1]), hexToRgb01(pSrc[2])];
+
+  g.useProgram(glProg);
+  g.activeTexture(g.TEXTURE0);
+  g.bindTexture(g.TEXTURE_2D, glTex);
+  g.uniform1i(glUni.tex, 0);
+  g.uniform2f(glUni.res, w, h);
+  g.uniform2f(glUni.mouse, glSmx, glSmy);
+  g.uniform3f(glUni.pal0, glPal[0][0], glPal[0][1], glPal[0][2]);
+  g.uniform3f(glUni.pal1, glPal[1][0], glPal[1][1], glPal[1][2]);
+  g.uniform3f(glUni.pal2, glPal[2][0], glPal[2][1], glPal[2][2]);
+  g.uniform3f(glUni.ch, glChR, glChG, glChB);
+  g.uniform1f(glUni.luma, glLuma);
+  g.uniform1f(glUni.time, t * 0.001);
+  g.uniform1f(glUni.bass, bass);
+  g.uniform1f(glUni.drag, clamp(liveDragMag, 0, 1));
+  g.uniform1f(glUni.mode, glMode);
+  g.drawArrays(g.TRIANGLES, 0, 3);
+}
+
+let idleFrames = 0, lastT = 0, lastPaint = 0, lastLyrSyncT = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const playing = st.media.playing && musicOn();
@@ -1812,23 +2367,28 @@ function frame(t) {
   if (look !== lookNow) {
     if (look && lookNow) skyA = Math.min(skyA, 0.2);
     lookNow = look; applyPal();
+    glPoke(480);
   }
   if (look) lookDrawn = look;
   skyA += ((look ? 1 : 0) - skyA) * 0.07;
   island.classList.toggle('sky', skyA > 0.4);
   paintSeek();
-  if (!playing && energy < 0.004 && !hasTopFx) {
+  if (cur === 'media' && playing && t - lastLyrSyncT > 90) { lastLyrSyncT = t; syncLyricLine(false); }
+  const hasGlass = glassActive();
+  const glAwake = hasGlass && (playing || t < glActiveUntil || hasTopFx || st.pillDrag || mergePullActive);
+  if (!playing && energy < 0.004 && !hasTopFx && !glAwake) {
     if (skyA < 0.01) {
-      if (idleFrames++ === 2) { drawAura(t, 0, false); if (!lastTopCleared) { fxTopG.clearRect(0, 0, FX_W, FX_H); lastTopCleared = true; } glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
+      if (idleFrames++ === 2) { drawAura(t, 0, false); drawGlassGL(t, 0.016); if (!lastTopCleared) { fxTopG.clearRect(0, 0, FX_W, FX_H); lastTopCleared = true; } glow.style.opacity = 0; skyG.clearRect(0, 0, SKY_W, SKY_H); barsG.clearRect(0, 0, barsC.width, barsC.height); }
       lastT = t;
       return;
     }
-    if (st.tucked) { drawAura(t, 0, false); return; }
+    if (st.tucked) { drawAura(t, 0, false); drawGlassGL(t, 0); return; }
     if (t - lastPaint < (aura ? 28 : 50)) return;
   }
   idleFrames = 0; lastTopCleared = false;
   const dt = Math.min(0.05, (t - lastT) / 1000); lastT = t; lastPaint = t;
   sampleLevels(t, playing);
+  drawGlassGL(t, dt);
 
   if (!st.pillDrag && !dragGlowActive && !mergePullActive) {
     glow.style.opacity = playing && st.react && (!aura || aura === 'lava') ? (skyA * clamp(0.1 + bass * 0.34, 0, 0.42)).toFixed(3) : 0;
@@ -1881,7 +2441,7 @@ seekEl.addEventListener('pointerdown', (e) => {
   if (!st.media.canSeek) return;
   e.preventDefault();
   try { seekEl.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
-  st.scrubbing = true; seekEl.classList.add('scrub');
+  st.scrubbing = true; seekEl.classList.add('scrub'); $('.meta').classList.add('scrubbing');
   artistText = $('#m-artist').textContent;
   scrubRatio = ratioAt(e);
   $('#m-artist').textContent = fmtT(scrubRatio * st.media.dur) + ' / ' + fmtT(st.media.dur);
@@ -1893,12 +2453,13 @@ seekEl.addEventListener('pointermove', (e) => {
 });
 function endScrub(apply) {
   if (!st.scrubbing) return;
-  st.scrubbing = false; seekEl.classList.remove('scrub');
+  st.scrubbing = false; seekEl.classList.remove('scrub'); $('.meta').classList.remove('scrubbing');
   $('#m-artist').textContent = st.media.artist || artistText || '';
   if (apply && st.media.dur > 0) {
     const ms = Math.round(scrubRatio * st.media.dur);
     st.media.pos = ms; st.media.at = performance.now(); st.seekAt = Date.now();   // show it at once; the player confirms shortly
     window.qazi.seek(ms);
+    syncLyricLine(true);
   }
   st.leftAt = Date.now();
 }
@@ -2675,12 +3236,14 @@ const SETTINGS_UI = [
   ['toggle', 'dualMonitors', 'Show on both monitors'],
   ['toggle', 'secondaryAlwaysOpen', 'Keep open on 2nd monitor'],
   ['toggle', 'soundFx', 'Sound effects'],
+  ['toggle', 'liquidGlass', 'Optical Liquid Glass lens refraction'],
   ['toggle', 'chameleonGlass', 'Adaptive chameleon glass tint'],
+  ['toggle', 'lyrics', 'Live synced song lyrics (LRCLIB)'],
   ['toggle', 'gameStealth', 'Smart fullscreen game stealth (Ctrl+Alt+G peek)'],
   ['toggle', 'agentPulse', 'Antigravity Agent pulse'],
   ['toggle', 'watchdogAlerts', 'Heavy render / build completion alerts'],
   ['toggle', 'persianHotkeys', 'Ctrl+Alt+F layout rescue · Ctrl+Alt+Z ZWNJ polish'],
-  ['swatch', 'skin', 'Theme', ['black', 'nebula', 'crystal', 'ember', 'reactor', 'venom']],        // cloud, water, lava and ice are parked until they are finished
+  ['swatch', 'skin', 'Theme', ['black', 'liquid', 'nebula', 'crystal', 'ember', 'reactor', 'venom']],        // cloud, water, lava and ice are parked until they are finished
   ['toggle', 'musicReact', 'Theme reacts to music'],
   ['toggle', 'visuals', 'Night sky with music (black theme)'],
   ['step', 'notifSeconds', 'Notification stays for', 2, 10, 's'],
@@ -2709,6 +3272,22 @@ function renderSettings() {
     const go = document.createElement('button'); go.className = 'go solid'; go.textContent = 'Install now';
     go.addEventListener('click', () => { go.textContent = 'Installing…'; window.qazi.updateInstall(); });
     row.append(ic, l, go);
+    stackList.appendChild(row);
+  }
+  if (st.outputs.length >= 2) {
+    const curDev = st.outputs.find((d) => d.isDefault) || st.outputs[0];
+    const row = document.createElement('div'); row.className = 'row set sp';
+    const ic = document.createElement('div'); ic.className = 'ic plain'; ic.innerHTML = svg(curDev && curDev.kind === 'headphones' ? 'headphones' : 'speaker');
+    const l = document.createElement('span'); l.className = 'lbl';
+    const b = document.createElement('b'); b.textContent = curDev ? curDev.name : 'Audio output';
+    const d = document.createElement('span'); d.className = 'dim'; d.textContent = 'Default playback device';
+    l.append(b, d);
+    const sw = document.createElement('button'); sw.className = 'go'; sw.textContent = 'Switch';
+    sw.addEventListener('click', () => {
+      sfx.tick();
+      window.qazi.audioCycleOutput().then((res) => { if (res && res.devices) { st.outputs = res.devices; paintVolDev(); renderStack(); } });
+    });
+    row.append(ic, l, sw);
     stackList.appendChild(row);
   }
   SETTINGS_UI.forEach(([type, key, label, a, b, unit], i) => {
@@ -2764,7 +3343,8 @@ function renderSettings() {
 }
 // What Peeky can do: one row per feature, under the pill. A click on a row tries the thing itself.
 const TOUR = [
-  ['note', 'Now playing', 'Play something: cover, title and controls appear here'],
+  ['note', 'Now playing & Synced Lyrics', 'Cover, controls, glowing live lyrics & tap-to-seek karaoke'],
+  ['headphones', 'Hover Volume & Audio Switcher', 'Scroll mouse over pill for volume; click chip to swap output'],
   ['bell', 'Notifications', 'One line on the pill. Click it to open that chat', 'inbox'],
   ['link', 'Smart copy', 'Copy a link, a sum or a date, then click the line'],
   ['tray', 'File shelf', 'Drop files on the pill. Drag them out when you need them'],
@@ -2877,7 +3457,11 @@ const applySettings = (s) => {
   st.watchdogAlerts = s.watchdogAlerts !== false;
   st.chameleonGlass = s.chameleonGlass !== false;
   st.persianHotkeys = s.persianHotkeys !== false;
+  st.liquidGlass = s.liquidGlass !== false;
+  st.lyricsMode = s.lyrics !== false;
   if (!st.chameleonGlass) { document.body.classList.remove('bright-under'); document.documentElement.style.setProperty('--ch-r', '18'); document.documentElement.style.setProperty('--ch-g', '24'); document.documentElement.style.setProperty('--ch-b', '42'); }
+  if (typeof updateLyricUi === 'function') updateLyricUi();
+  if (typeof glPoke === 'function') glPoke(480);
   if (s.netAlerts === false) { st.net = { online: true, vpn: '', proxy: false }; paintStatus(); }
   st.calendar = CALENDARS.includes(s.calendar) ? s.calendar : 'gregorian';
   st.face = s.face === 'clock' ? 'clock' : 'eyes';

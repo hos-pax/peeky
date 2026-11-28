@@ -254,7 +254,7 @@ pub fn start() {
                     clip::changed();
                 }
             }
-            if start.elapsed() > Duration::from_secs(1) && every("ambient", 380) {
+            if start.elapsed() > Duration::from_secs(1) && every("ambient", 220) {
                 telemetry::tick_ambient(&mut telem);
             }
             if start.elapsed() > Duration::from_secs(2) && every("telemetry", 1800) {

@@ -2,8 +2,10 @@
 #![windows_subsystem = "windows"]
 
 mod audio;
+mod audio_dev;
 mod clip;
 mod hit;
+mod lyrics;
 mod media;
 mod net;
 mod ocr;
@@ -288,6 +290,38 @@ fn speedo_cmd(cmd: String, id: Option<String>, on: Option<bool>) -> Value {
 fn ocr_done(text: String, conf: f64) {
     ocr::page_answer(text, conf as i32)
 }
+#[tauri::command]
+fn lyrics_get(key: String, title: String, artist: String, dur_ms: u64, force: Option<bool>) {
+    lyrics::fetch_async(&title, &artist, &key, dur_ms, force.unwrap_or(false))
+}
+#[tauri::command]
+async fn lyrics_search(query: String, dur_ms: u64) -> Vec<Value> {
+    tauri::async_runtime::spawn_blocking(move || lyrics::search_candidates(&query, dur_ms)).await.unwrap_or_default()
+}
+#[tauri::command]
+async fn lyrics_pick(key: String, id: u64) -> bool {
+    tauri::async_runtime::spawn_blocking(move || lyrics::apply_candidate_id(&key, id)).await.unwrap_or(false)
+}
+#[tauri::command]
+fn lyrics_offset(key: String, offset_ms: i64) -> bool {
+    lyrics::set_offset(&key, offset_ms)
+}
+#[tauri::command]
+fn audio_outputs() -> Vec<Value> {
+    audio_dev::list_outputs()
+}
+#[tauri::command]
+fn audio_set_output(id: String) -> bool {
+    let ok = audio_dev::set_default_output(&id);
+    if ok {
+        sys::helper(serde_json::json!({ "t": "audio-outputs", "devices": audio_dev::list_outputs() }));
+    }
+    ok
+}
+#[tauri::command]
+fn audio_cycle_output() -> Value {
+    audio_dev::cycle_output()
+}
 
 // ---------------------------------------------------------------- commands: notes and vault
 #[tauri::command]
@@ -487,6 +521,7 @@ fn main() {
             settings_get, settings_set, action, open_url, ocr_done, speedo_cmd, update_check, update_install,
             notes_get, note_save, note_pin, note_fired, note_remove,
             telemetry_get, watchdog_scan, watchdog_clean, watchdog_kill, agy_hub_get, agy_focus, agy_open,
+            lyrics_get, lyrics_search, lyrics_pick, lyrics_offset, audio_outputs, audio_set_output, audio_cycle_output,
             vault_list, vault_generate, vault_save, vault_edit, fg_context, vault_copy, copy_secret, vault_reveal, vault_remove, debug_out
         ])
         .setup(move |app| {

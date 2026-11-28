@@ -752,14 +752,147 @@ pub fn agy_open_path(path: &str, reveal: bool) -> bool {
 }
 
 // ---------------------------------------------------------------- Adaptive Chameleon Screen Edge Sampler
+fn sample_backdrop_grid(state: &mut TelemetryState, cx: i32, top_y: i32, pill_w: i32, pill_h: i32) -> bool {
+    use std::sync::{Mutex, OnceLock};
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_YVIRTUALSCREEN};
+    static LAST_RGB: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+
+    const GW: i32 = 32;
+    const GH: i32 = 8;
+    let w = pill_w.max(200);
+    let h = pill_h.max(42);
+    let left = cx - w / 2;
+    let right = left + w;
+
+    unsafe {
+        let sdc = GetDC(None);
+        if sdc.0.is_null() {
+            return false;
+        }
+        let mdc = CreateCompatibleDC(Some(sdc));
+        if mdc.0.is_null() {
+            let _ = ReleaseDC(None, sdc);
+            return false;
+        }
+        let bmp = CreateCompatibleBitmap(sdc, GW, GH);
+        if bmp.0.is_null() {
+            let _ = DeleteDC(mdc);
+            let _ = ReleaseDC(None, sdc);
+            return false;
+        }
+        let old = SelectObject(mdc, HGDIOBJ(bmp.0));
+        let _ = SetStretchBltMode(mdc, HALFTONE);
+        let _ = SetBrushOrgEx(mdc, 0, 0, None);
+
+        let vtop = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        // Sample flanking vertical strips outside the pill (zero self-occlusion) + horizontal strips above/below
+        let _ = StretchBlt(mdc, 0, 0, 4, GH, Some(sdc), left - 24, top_y, 22, h, SRCCOPY);
+        let _ = StretchBlt(mdc, 28, 0, 4, GH, Some(sdc), right + 2, top_y, 22, h, SRCCOPY);
+        if top_y - vtop > 24 {
+            let _ = StretchBlt(mdc, 4, 0, 24, 3, Some(sdc), left, top_y - 18, w, 16, SRCCOPY);
+        } else {
+            let _ = StretchBlt(mdc, 4, 0, 24, 3, Some(sdc), left, top_y + h + 3, w, 12, SRCCOPY);
+        }
+        let _ = StretchBlt(mdc, 4, 3, 24, 5, Some(sdc), left, top_y + h + 4, w, 24, SRCCOPY);
+
+        let mut bmi = BITMAPINFO::default();
+        bmi.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: GW,
+            biHeight: -GH,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        };
+        let mut bgra = [0u8; (GW * GH * 4) as usize];
+        let lines = GetDIBits(
+            mdc,
+            bmp,
+            0,
+            GH as u32,
+            Some(bgra.as_mut_ptr() as *mut _),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
+        SelectObject(mdc, old);
+        let _ = DeleteObject(HGDIOBJ(bmp.0));
+        let _ = DeleteDC(mdc);
+        let _ = ReleaseDC(None, sdc);
+        if lines <= 0 {
+            return false;
+        }
+
+        let mut rgb = Vec::with_capacity((GW * GH * 3) as usize);
+        let mut sum_r: u64 = 0;
+        let mut sum_g: u64 = 0;
+        let mut sum_b: u64 = 0;
+        let count = (GW * GH) as f32;
+        for px in bgra.chunks_exact(4) {
+            let b = px[0];
+            let g = px[1];
+            let r = px[2];
+            rgb.push(r);
+            rgb.push(g);
+            rgb.push(b);
+            sum_r += r as u64;
+            sum_g += g as u64;
+            sum_b += b as u64;
+        }
+
+        let ur = (sum_r as f32 / count).round().clamp(0.0, 255.0) as u8;
+        let ug = (sum_g as f32 / count).round().clamp(0.0, 255.0) as u8;
+        let ub = (sum_b as f32 / count).round().clamp(0.0, 255.0) as u8;
+        let avg_rgb = [ur, ug, ub];
+
+        let changed = state.last_ambient.is_none_or(|p| {
+            let dr = (avg_rgb[0] as i32 - p[0] as i32).abs();
+            let dg = (avg_rgb[1] as i32 - p[1] as i32).abs();
+            let db = (avg_rgb[2] as i32 - p[2] as i32).abs();
+            dr + dg + db >= 18
+        });
+        if changed {
+            state.last_ambient = Some(avg_rgb);
+            let luma = (0.2126 * ur as f64 + 0.7152 * ug as f64 + 0.0722 * ub as f64) / 255.0;
+            sys::helper(json!({
+                "t": "ambient",
+                "rgb": avg_rgb,
+                "luma": (luma * 100.0).round() / 100.0,
+            }));
+        }
+
+        if settings::flag("liquidGlass") {
+            let lock = LAST_RGB.get_or_init(|| Mutex::new(Vec::new()));
+            let mut prev = lock.lock().unwrap();
+            let changed = prev.len() != rgb.len()
+                || prev.iter().zip(rgb.iter()).any(|(&x, &y)| x.abs_diff(y) > 9);
+            if changed {
+                *prev = rgb.clone();
+                drop(prev);
+                sys::helper(json!({
+                    "t": "backdrop",
+                    "w": GW,
+                    "h": GH,
+                    "rgb": sys::b64(&rgb),
+                }));
+            }
+        }
+        true
+    }
+}
+
 fn sample_ambient(state: &mut TelemetryState) {
-    if !settings::flag("chameleonGlass") {
+    if !settings::flag("chameleonGlass") && !settings::flag("liquidGlass") {
         return;
     }
-    let Some((cx, top_y, _w, _h, visible)) = hit::main_bounds_for_ambient() else { return };
+    let Some((cx, top_y, pill_w, pill_h, visible)) = hit::main_bounds_for_ambient() else { return };
     if !visible {
         return;
     }
+    if sample_backdrop_grid(state, cx, top_y, pill_w, pill_h) {
+        return;
+    }
+    let (_w, _h) = (pill_w, pill_h);
     unsafe {
         let sdc = GetDC(None);
         if sdc.0.is_null() {

@@ -10,12 +10,13 @@ use windows::Win32::System::Registry::*;
 use crate::sys;
 
 static SETTINGS: Mutex<Option<Map<String, Value>>> = Mutex::new(None);
-const THEMES: [&str; 10] = ["black", "nebula", "crystal", "ember", "reactor", "venom", "cloud", "water", "lava", "ice"];
-const BOOLS: [&str; 23] = [
+const THEMES: [&str; 11] = ["black", "liquid", "nebula", "crystal", "ember", "reactor", "venom", "cloud", "water", "lava", "ice"];
+const BOOLS: [&str; 25] = [
     "autoUpdate", "musicReact", "netAlerts", "sensorDot", "smartCopy", "autoHide", "hideVideo",
     "copyPreview", "clipHistory", "deviceAlerts", "downloadAlerts", "shelf", "visuals",
     "noteHotkey", "vaultSymbols", "dualMonitors", "secondaryAlwaysOpen", "soundFx",
     "gameStealth", "agentPulse", "watchdogAlerts", "chameleonGlass", "persianHotkeys",
+    "liquidGlass", "lyrics",
 ];
 const CALENDARS: [&str; 4] = ["gregorian", "shamsi", "shamsi-fa", "both"];
 
@@ -32,6 +33,7 @@ fn defaults() -> Map<String, Value> {
         "netAlerts": true, "sensorDot": true, "smartCopy": true, "musicReact": true, "autoUpdate": true,
         "dualMonitors": false, "secondaryAlwaysOpen": true, "monitorName": "", "soundFx": true,
         "gameStealth": true, "agentPulse": true, "watchdogAlerts": true, "chameleonGlass": true, "persianHotkeys": true,
+        "liquidGlass": true, "lyrics": true,
     })
     .as_object()
     .cloned()

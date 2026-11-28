@@ -162,6 +162,11 @@ impl Media {
             self.last_key = key.clone();
             let data = props.Thumbnail().ok().and_then(|t| read_stream(t.OpenReadAsync())).map(|b| sys::b64(&b));
             sys::helper(json!({ "t": "thumb", "key": key, "data": data }));
+            let app_low = app.to_lowercase();
+            let pure_player = app_low.contains("vlc") || app_low.contains("mpc") || app_low.contains("mpv") || app_low.contains("potplayer");
+            if !pure_player {
+                crate::lyrics::fetch_async(&title, &artist, &key, dur_r, false);
+            }
         }
     }
 

@@ -46,6 +46,23 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   transition: width .42s var(--spring), transform .32s var(--spring), box-shadow .22s ease, opacity .16s ease;
   will-change: width, transform;
 }
+#glass-gl {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border-radius: inherit; pointer-events: none; z-index: 0;
+  opacity: 0; transition: opacity .28s ease;
+}
+body.gl-glass-on #glass-gl { opacity: 1; }
+body.gl-glass-on:not(.scene) #island {
+  background: linear-gradient(172deg, rgba(255, 255, 255, .09) 0%, rgba(255, 255, 255, .01) 48%, rgba(var(--ch-r), var(--ch-g), var(--ch-b), .10) 100%), rgba(6, 8, 14, .34);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, .52),
+    inset 0 1.3px 0 rgba(255, 255, 255, .44),
+    inset 0 -1px 0 rgba(255, 255, 255, .15),
+    inset 1px 0 4px rgba(125, 211, 252, .24),
+    inset -1px 0 4px rgba(196, 155, 255, .24),
+    inset 0 0 0 1px rgba(255, 255, 255, .20);
+}
+#island.tucked #glass-gl { opacity: 0 !important; }
 #island::before {
   content: ""; position: absolute; top: -20%; left: -40%; width: 52%; height: 140%;
   background: linear-gradient(112deg, transparent 18%, rgba(125, 211, 252, .22) 40%, rgba(255, 255, 255, .44) 50%, rgba(192, 140, 255, .28) 60%, transparent 82%);
@@ -119,7 +136,7 @@ body.bright-under #island {
 }
 
 /* the music night sky (gradient + lights + stars match full 700px window width, zero edge clipping) */
-#sky { position: absolute; top: 0; left: 50%; width: 700px; height: var(--h); margin-left: -350px; pointer-events: none; }
+#sky { position: absolute; top: 0; left: 50%; width: 700px; height: var(--h); margin-left: -350px; pointer-events: none; z-index: 1; }
 
 /* track position: a 2px hairline; near the bottom edge it grows into a scrubber (when the player allows seeking) */
 #seek { position: absolute; left: 0; right: 0; bottom: 0; height: 9px; display: none; }
@@ -204,10 +221,21 @@ body.bright-under #island {
 [data-view="media"] { gap: 7px; padding: 0 5px 0 6px; }
 #art { flex: none; width: 24px; height: 24px; border-radius: 7px; background: linear-gradient(135deg, #ffffff38, #ffffff14) center/cover; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0, 0, 0, .3); }
 #art svg { width: 13px; height: 13px; }
-.meta { max-width: 150px; min-width: 40px; line-height: 1.2; margin-right: 2px; }
+.meta { max-width: 150px; min-width: 40px; line-height: 1.2; margin-right: 2px; transition: max-width .28s var(--spring); }
+.meta.has-lyric { width: 215px; max-width: 225px; }
 #m-title { font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 #m-artist { font-size: 10.5px; color: rgba(255, 255, 255, .6); overflow: hidden; text-overflow: ellipsis; }
 #m-artist:empty { display: none; }
+.meta.has-lyric:not(.scrubbing) #m-artist { display: none; }
+#m-lyric { display: none; overflow: hidden; white-space: nowrap; font-size: 11px; font-weight: 600; color: #e0f2fe; cursor: pointer; text-shadow: 0 1px 2px rgba(0,0,0,.95), 0 0 11px color-mix(in srgb, var(--c3) 70%, transparent); }
+.meta.has-lyric:not(.scrubbing) #m-lyric { display: block; }
+#m-lyric.inst { color: rgba(255, 255, 255, .62); letter-spacing: .16em; }
+#m-lyric-txt { display: inline-block; will-change: transform; }
+.lyric-pop { animation: lyricIn .24s cubic-bezier(.22, 1, .36, 1); }
+@keyframes lyricIn { from { opacity: 0; transform: translateY(4px); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+#b-lyr { margin-right: 1px; }
+#b-lyr.has-sync { color: #7dd3fc; }
+#b-lyr.active { background: rgba(125, 211, 252, .26); color: #fff; box-shadow: inset 0 0 0 1px rgba(125, 211, 252, .52); }
 #bars { width: 30px; height: 20px; flex: none; }
 #m-timer { display: none; font-weight: 600; font-size: 12px; color: #ffe2a8; font-variant-numeric: tabular-nums; }
 .timing #bars { display: none; }
@@ -251,6 +279,33 @@ body.bright-under #island {
 .vbar { width: 110px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .18); overflow: hidden; }
 .vbar i { display: block; height: 100%; width: 50%; background: linear-gradient(90deg, var(--fx1), var(--fx3)); box-shadow: 0 0 8px color-mix(in srgb, var(--fx1) 70%, transparent); border-radius: 3px; transition: width .1s ease-out; }
 #v-num { width: 24px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.vol-dev { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 6px; border-radius: 11px; background: rgba(255, 255, 255, .11); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .20); font-size: 10.5px; font-weight: 600; color: #bae6fd; max-width: 118px; overflow: hidden; flex: none; transition: background .15s, transform .2s var(--spring), color .15s; }
+.vol-dev:hover { background: rgba(125, 211, 252, .26); color: #fff; transform: scale(1.04); }
+.vol-dev.hidden { display: none; }
+.vol-dev svg { width: 12.5px; height: 12.5px; flex: none; }
+#v-dev-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* synced lyrics karaoke drawer */
+.lyr-bar { display: flex; align-items: center; gap: 5px; padding: 4px 6px; margin-bottom: 4px; border-radius: 12px; background: rgba(255, 255, 255, .05); }
+.lyr-meta { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, .86); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lyr-chip { height: 22px; padding: 0 7px; border-radius: 10px; background: rgba(255, 255, 255, .10); color: rgba(255, 255, 255, .85); font-size: 10.5px; font-weight: 600; flex: none; display: inline-flex; align-items: center; gap: 3px; transition: background .15s, color .15s; }
+.lyr-chip:hover { background: rgba(255, 255, 255, .22); color: #fff; }
+.lyr-chip.blue { color: #bae6fd; background: rgba(56, 189, 248, .15); }
+.lyr-chip svg { width: 12px; height: 12px; }
+.lyr-off { font-size: 10px; font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .64); min-width: 30px; text-align: center; }
+.lyr-q { display: flex; gap: 5px; margin-bottom: 5px; }
+.lyr-q input { flex: 1; min-width: 0; height: 26px; padding: 0 9px; border-radius: 10px; border: 1px solid rgba(255,255,255,.16); background: rgba(0,0,0,.34); color: #fff; font: inherit; font-size: 12px; outline: none; }
+.lyr-q input:focus { border-color: #38bdf8; }
+.row.lyr { height: auto; min-height: 29px; padding: 5px 10px; gap: 8px; align-items: flex-start; border-radius: 11px; opacity: .78; transition: opacity .18s, background .18s, transform .2s var(--spring); }
+.row.lyr.past { opacity: .42; }
+.row.lyr.active { opacity: 1; background: linear-gradient(90deg, color-mix(in srgb, var(--c1) 28%, rgba(255,255,255,.10)), color-mix(in srgb, var(--c3) 22%, rgba(255,255,255,.06))); box-shadow: inset 2.5px 0 0 #7dd3fc, 0 2px 12px color-mix(in srgb, var(--c2) 28%, transparent); }
+.row.lyr:hover { opacity: 1; background: rgba(255, 255, 255, .12); }
+.lyr-t { font-size: 10px; font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, .44); padding-top: 2px; flex: none; }
+.row.lyr.active .lyr-t { color: #7dd3fc; }
+.lyr-txt { flex: 1; min-width: 0; white-space: normal; line-height: 1.42; font-size: 12.5px; font-weight: 500; color: rgba(255, 255, 255, .94); }
+.row.lyr.active .lyr-txt { font-weight: 700; color: #fff; text-shadow: 0 0 12px rgba(125, 211, 252, .55); }
+.row.lyr-plain { height: auto; padding: 9px 12px; white-space: pre-wrap; line-height: 1.58; font-size: 12px; color: rgba(255, 255, 255, .86); cursor: default; }
+.row.lyr-plain:hover { background: none; transform: none; }
 [data-view="game"] { padding: 0 14px 0 11px; gap: 8px; }
 #gm-stats { font-size: 12px; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 
@@ -455,6 +510,7 @@ body.bright-under #island {
 .sws button:hover { transform: scale(1.18); }
 .sws button.on { box-shadow: 0 0 0 1.5px #000, 0 0 0 3px #fff; }
 .sw-black { background: #000; }
+.sw-liquid { background: conic-gradient(from 35deg, #38bdf8, #818cf8, #e879f9, #67e8f9, #1e293b, #38bdf8); box-shadow: inset 0 1px 2px rgba(255, 255, 255, .85); }
 .sw-sky { background: linear-gradient(135deg, #3319a8, #6a42dc); }
 .sw-nebula { background: radial-gradient(circle at 30% 35%, #ff3d9a, #6a1fd1 55%, #08030f); }
 .sw-crystal { background: linear-gradient(120deg, #1b3fd0, #4a35e0 55%, #8a3fe0); }
