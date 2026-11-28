@@ -165,7 +165,7 @@ impl Media {
             let app_low = app.to_lowercase();
             let pure_player = app_low.contains("vlc") || app_low.contains("mpc") || app_low.contains("mpv") || app_low.contains("potplayer");
             if !pure_player {
-                crate::lyrics::fetch_async(&title, &artist, &key, dur_r, false);
+                crate::lyrics::fetch_async(&title, &artist, &key, dur_r.max(0.0).round() as u64, false);
             }
         }
     }
